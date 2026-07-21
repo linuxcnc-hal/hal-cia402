@@ -41,6 +41,8 @@ TYPE_COLORS = {
     DataType.BIT: QtGui.QColor("#e3b341"),
     DataType.S32: QtGui.QColor("#58a6ff"),
     DataType.U32: QtGui.QColor("#a371f7"),
+    DataType.S64: QtGui.QColor("#79c0ff"),
+    DataType.U64: QtGui.QColor("#d2a8ff"),
     DataType.FLOAT: QtGui.QColor("#3fb950"),
     DataType.UNKNOWN: QtGui.QColor("#8b949e"),
 }
@@ -103,13 +105,12 @@ def build_project(
     if not joints:
         inferred_joint_count = joint_count or max(1, len(ethercat_nodes))
         joints = create_joint_nodes(inferred_joint_count)
-    if components:
-        attach_component_parameters(components, comp_path, live_parameters)
-    else:
+    if not components:
         inferred_instance_count = instance_count or max(1, len(joints), len(ethercat_nodes))
         components = parse_comp(comp_path, inferred_instance_count)
 
     all_nodes = joints + components + ethercat_nodes
+    attach_component_parameters(all_nodes, comp_path, live_parameters)
     _hide_all_ports(all_nodes)
     vertical_spacing = 140.0
     _layout_and_add(project, joints, 0.0, vertical_spacing)
@@ -397,22 +398,57 @@ class WiringScene(QtWidgets.QGraphicsScene):
     def edit_parameters(self, node: Node) -> None:
         dialog = QtWidgets.QDialog(self.views()[0])
         dialog.setWindowTitle("%s parameters" % node.node_id)
-        layout = QtWidgets.QFormLayout(dialog)
+        dialog.resize(720, 650)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        search = QtWidgets.QLineEdit()
+        search.setPlaceholderText("Search parameters...")
+        layout.addWidget(search)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_widget = QtWidgets.QWidget()
+        form = QtWidgets.QFormLayout(form_widget)
+        scroll.setWidget(form_widget)
+        layout.addWidget(scroll)
         editors = {}
-        for parameter in node.parameters.values():
+        for parameter in sorted(node.parameters.values(), key=lambda item: item.name):
             editor = QtWidgets.QLineEdit(parameter.value)
             editor.setToolTip(parameter.description)
-            layout.addRow(parameter.name, editor)
-            editors[parameter.name] = editor
+            editor.setReadOnly(not parameter.writable)
+            label = QtWidgets.QLabel(
+                "%s  [%s %s]"
+                % (
+                    parameter.name,
+                    parameter.data_type.value,
+                    "RW" if parameter.writable else "RO",
+                )
+            )
+            label.setToolTip(parameter.full_name)
+            form.addRow(label, editor)
+            editors[parameter.name] = (parameter, label, editor)
+
+        def filter_parameters(text: str) -> None:
+            search_text = text.strip().lower()
+            for parameter, label, editor in editors.values():
+                haystack = "%s %s %s" % (
+                    parameter.name,
+                    parameter.full_name,
+                    parameter.description,
+                )
+                visible = not search_text or search_text in haystack.lower()
+                label.setVisible(visible)
+                editor.setVisible(visible)
+
+        search.textChanged.connect(filter_parameters)
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
         )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        layout.addRow(buttons)
+        layout.addWidget(buttons)
         if dialog.exec() if hasattr(dialog, "exec") else dialog.exec_():
-            for name, editor in editors.items():
-                node.parameters[name].value = editor.text().strip()
+            for name, (parameter, _label, editor) in editors.items():
+                if parameter.writable:
+                    node.parameters[name].value = editor.text().strip()
             self.project_changed.emit()
 
     def delete_selected_wires(self) -> None:

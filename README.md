@@ -14,7 +14,7 @@ The editor provides:
 * Automatic parsing of EtherCAT `pdoEntry` pins, types, and directions.
 * LinuxCNC joint blocks based on the `motion(9)` joint interface.
 * HAL type, direction, duplicate writer, and duplicate signal validation.
-* Editable `cia402` parameters by double-clicking a component block.
+* Searchable live parameter editing for joint, `cia402`, and `lcec` blocks.
 * Project save/load using JSON and deterministic `.hal` file export.
 * Reversible block removal with an Available Blocks palette.
 * Per-block signal selection so blocks start compact and only show requested pins.
@@ -47,9 +47,13 @@ python3 -m cia402_gui \
     --instances 3
 ```
 
-Drag from one port to another and enter a HAL signal name. Double-click a
-`cia402` block to edit its parameters. Use **File > Preview HAL** to inspect
-the output and **File > Export HAL** to write `cia402-generated.hal`.
+Drag from one port to another and enter a HAL signal name. Double-click any
+block to inspect all parameters discovered from the running HAL. Writable
+parameters are marked `RW` and can be edited; read-only parameters are marked
+`RO` and shown for reference. The parameter dialog includes search, and HAL
+export emits `setp` only for writable parameters. Use **File > Preview HAL**
+to inspect the output and **File > Export HAL** to write
+`cia402-generated.hal`.
 
 Newly discovered and imported blocks initially show no signals. Select a block
 to open the **Block signals** panel, search its available pins, and double-click

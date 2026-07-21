@@ -10,7 +10,7 @@ from .model import DataType, Direction, Node, Parameter, Port
 
 
 DECLARATION_RE = re.compile(
-    r'^\s*(pin|param)\s+(in|out|io|r|rw)\s+(bit|float|signed|unsigned|s32|u32)\s+'
+    r'^\s*(pin|param)\s+(in|out|io|r|rw)\s+(bit|float|signed|unsigned|s32|u32|s64|u64)\s+'
     r'([A-Za-z_][A-Za-z0-9_]*)[^;]*?(?:"([^"]*)")?\s*;'
 )
 
@@ -34,12 +34,12 @@ def parse_comp(path: Path, instance_count: int = 1) -> List[Node]:
         if kind == "pin":
             pin_specs.append((name, Direction(direction), DataType.parse(raw_type), description or ""))
         else:
-            parameter_specs.append(spec)
+            parameter_specs.append(spec + (direction == "rw",))
 
     defaults: Dict[str, str] = {}
     if ";;" in text:
         implementation = text.split(";;", 1)[1]
-        parameter_names = {raw_name for _, raw_name, _, _ in parameter_specs}
+        parameter_names = {raw_name for _, raw_name, _, _, _ in parameter_specs}
         for raw_name in parameter_names:
             assignment = re.search(
                 r"^\s*%s\s*=\s*([^;]+);" % re.escape(raw_name),
@@ -61,13 +61,14 @@ def parse_comp(path: Path, instance_count: int = 1) -> List[Node]:
                 data_type=data_type,
                 description=description,
             )
-        for name, raw_name, data_type, description in parameter_specs:
+        for name, raw_name, data_type, description, writable in parameter_specs:
             node.parameters[name] = Parameter(
                 name=name,
                 full_name="%s.%s" % (prefix, name),
                 data_type=data_type,
                 value=defaults.get(raw_name, "0"),
                 description=description,
+                writable=writable,
             )
         nodes.append(node)
     return nodes
@@ -183,6 +184,8 @@ def _live_type(value, hal_module=None) -> DataType:
             getattr(hal_module, "HAL_BIT", object()): DataType.BIT,
             getattr(hal_module, "HAL_S32", object()): DataType.S32,
             getattr(hal_module, "HAL_U32", object()): DataType.U32,
+            getattr(hal_module, "HAL_S64", object()): DataType.S64,
+            getattr(hal_module, "HAL_U64", object()): DataType.U64,
             getattr(hal_module, "HAL_FLOAT", object()): DataType.FLOAT,
         }
         return mapping.get(value, DataType.UNKNOWN)
@@ -211,6 +214,14 @@ def _info_value(info: dict, name: str, default=None):
     return info.get(name, info.get(name.lower(), default))
 
 
+def _live_writable(value, hal_module=None) -> bool:
+    if isinstance(value, str):
+        return value.strip().upper() in ("RW", "W")
+    if hal_module is not None and hasattr(hal_module, "HAL_RW"):
+        return value == hal_module.HAL_RW
+    return True
+
+
 def _nodes_from_pin_info(pin_info: Iterable[dict], hal_module=None) -> List[Node]:
     nodes: Dict[str, Node] = {}
     for info in pin_info:
@@ -237,21 +248,29 @@ def _nodes_from_pin_info(pin_info: Iterable[dict], hal_module=None) -> List[Node
     return sorted(nodes.values(), key=lambda node: (node.kind, int(node.node_id.split(".")[1])))
 
 
-def _discover_with_python_hal() -> Tuple[List[Node], Dict[str, Tuple[DataType, str]]]:
+def _discover_with_python_hal() -> Tuple[List[Node], Dict[str, Parameter]]:
     import hal  # Available when running on a LinuxCNC installation.
 
     nodes = _nodes_from_pin_info(hal.get_info_pins(), hal)
-    parameters: Dict[str, Tuple[DataType, str]] = {}
+    parameters: Dict[str, Parameter] = {}
     if hasattr(hal, "get_info_params"):
         for info in hal.get_info_params():
             full_name = str(_info_value(info, "NAME", ""))
-            if not full_name.startswith("cia402."):
+            if not full_name.startswith(("joint.", "cia402.", "lcec.")):
                 continue
             data_type = _live_type(_info_value(info, "TYPE"), hal)
             value = _info_value(info, "VALUE", "0")
             if isinstance(value, bool):
                 value = "1" if value else "0"
-            parameters[full_name] = (data_type, str(value))
+            access = _info_value(info, "DIRECTION", _info_value(info, "DIR"))
+            parameters[full_name] = Parameter(
+                name=full_name,
+                full_name=full_name,
+                data_type=data_type,
+                value=str(value),
+                description="Live LinuxCNC HAL parameter",
+                writable=_live_writable(access, hal),
+            )
     return nodes, parameters
 
 
@@ -269,7 +288,7 @@ def _halcmd_rows(item_type: str, pattern: Optional[str] = None) -> List[List[str
     return [line.split() for line in result.stdout.splitlines() if line.strip()]
 
 
-def _discover_with_halcmd() -> Tuple[List[Node], Dict[str, Tuple[DataType, str]]]:
+def _discover_with_halcmd() -> Tuple[List[Node], Dict[str, Parameter]]:
     pin_info = []
     for row in _halcmd_rows("pin"):
         name_index = next(
@@ -291,10 +310,14 @@ def _discover_with_halcmd() -> Tuple[List[Node], Dict[str, Tuple[DataType, str]]
             {"NAME": row[name_index], "TYPE": raw_type, "DIRECTION": raw_direction}
         )
 
-    parameters: Dict[str, Tuple[DataType, str]] = {}
+    parameters: Dict[str, Parameter] = {}
     for row in _halcmd_rows("param"):
         name_index = next(
-            (index for index, token in enumerate(row) if token.startswith("cia402.")),
+            (
+                index
+                for index, token in enumerate(row)
+                if token.startswith(("joint.", "cia402.", "lcec."))
+            ),
             None,
         )
         if name_index is None:
@@ -305,11 +328,23 @@ def _discover_with_halcmd() -> Tuple[List[Node], Dict[str, Tuple[DataType, str]]
             "unknown",
         )
         value = before_name[-1] if before_name else "0"
-        parameters[row[name_index]] = (DataType.parse(raw_type), value)
+        access = next(
+            (token for token in before_name if token.upper() in ("RO", "RW")),
+            "RW",
+        )
+        full_name = row[name_index]
+        parameters[full_name] = Parameter(
+            name=full_name,
+            full_name=full_name,
+            data_type=DataType.parse(raw_type),
+            value=value,
+            description="Live LinuxCNC HAL parameter",
+            writable=_live_writable(access),
+        )
     return _nodes_from_pin_info(pin_info), parameters
 
 
-def discover_live_hal() -> Tuple[List[Node], Dict[str, Tuple[DataType, str]]]:
+def discover_live_hal() -> Tuple[List[Node], Dict[str, Parameter]]:
     """Discover joint and cia402 objects from a running LinuxCNC HAL.
 
     The in-process LinuxCNC Python module is preferred. Older installations
@@ -329,20 +364,44 @@ def discover_live_hal() -> Tuple[List[Node], Dict[str, Tuple[DataType, str]]]:
 
 
 def attach_component_parameters(
-    nodes: Sequence[Node], comp_path: Path, live_parameters: Dict[str, Tuple[DataType, str]]
+    nodes: Sequence[Node], comp_path: Path, live_parameters: Dict[str, Parameter]
 ) -> None:
     cia_nodes = [node for node in nodes if node.kind == "cia402"]
-    if not cia_nodes:
-        return
-    maximum_index = max(int(node.node_id.split(".")[1]) for node in cia_nodes)
-    templates = {node.node_id: node for node in parse_comp(comp_path, maximum_index + 1)}
-    for node in cia_nodes:
-        template = templates[node.node_id]
-        node.parameters = template.parameters
-        for parameter in node.parameters.values():
-            live = live_parameters.get(parameter.full_name)
-            if live:
-                live_type, live_value = live
-                if live_type != DataType.UNKNOWN:
-                    parameter.data_type = live_type
-                parameter.value = live_value
+    if cia_nodes:
+        maximum_index = max(int(node.node_id.split(".")[1]) for node in cia_nodes)
+        templates = {node.node_id: node for node in parse_comp(comp_path, maximum_index + 1)}
+        for node in cia_nodes:
+            node.parameters = templates[node.node_id].parameters
+
+    # Attach every live HAL parameter to the most-specific matching block.
+    # This covers joint.N.*, cia402.N.*, and lcec.M.S.* parameters.
+    nodes_by_prefix = sorted(nodes, key=lambda node: len(node.node_id), reverse=True)
+    for live in live_parameters.values():
+        node = next(
+            (
+                candidate
+                for candidate in nodes_by_prefix
+                if live.full_name.startswith(candidate.node_id + ".")
+            ),
+            None,
+        )
+        if node is None:
+            continue
+        name = live.full_name[len(node.node_id) + 1 :]
+        existing = node.parameters.get(name)
+        if existing is not None:
+            if live.data_type != DataType.UNKNOWN:
+                existing.data_type = live.data_type
+            existing.value = live.value
+            existing.writable = live.writable
+            if live.description:
+                existing.description = live.description
+        else:
+            node.parameters[name] = Parameter(
+                name=name,
+                full_name=live.full_name,
+                data_type=live.data_type,
+                value=live.value,
+                description=live.description,
+                writable=live.writable,
+            )

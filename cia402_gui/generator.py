@@ -21,13 +21,15 @@ def _format_parameter(data_type: DataType, value: str) -> str:
             return "0"
         if normalized not in ("0", "1"):
             raise WiringError("BIT parameter must be 0 or 1: %s" % value)
-    elif data_type in (DataType.S32, DataType.U32):
+    elif data_type in (DataType.S32, DataType.U32, DataType.S64, DataType.U64):
         try:
             number = int(value, 0)
         except ValueError as exc:
             raise WiringError("Invalid integer parameter: %s" % value) from exc
-        minimum = 0 if data_type == DataType.U32 else -(2 ** 31)
-        maximum = (2 ** 32 - 1) if data_type == DataType.U32 else (2 ** 31 - 1)
+        bits = 64 if data_type in (DataType.S64, DataType.U64) else 32
+        unsigned = data_type in (DataType.U32, DataType.U64)
+        minimum = 0 if unsigned else -(2 ** (bits - 1))
+        maximum = (2 ** bits - 1) if unsigned else (2 ** (bits - 1) - 1)
         if not minimum <= number <= maximum:
             raise WiringError("Parameter is outside the %s range: %s" % (data_type.value, value))
     elif data_type == DataType.FLOAT:
@@ -56,6 +58,7 @@ def generate_hal(project: WiringProject, include_timestamp: bool = False) -> str
         for node in project.nodes.values()
         if node.active
         for parameter in node.parameters.values()
+        if parameter.writable
     ]
     if parameters:
         lines.extend(("", "# Component parameters"))

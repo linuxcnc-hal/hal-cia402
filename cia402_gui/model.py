@@ -16,6 +16,8 @@ class DataType(str, Enum):
     BIT = "bit"
     S32 = "s32"
     U32 = "u32"
+    S64 = "s64"
+    U64 = "u64"
     FLOAT = "float"
     UNKNOWN = "unknown"
 
@@ -26,6 +28,8 @@ class DataType(str, Enum):
             "unsigned": cls.U32,
             "hal_s32": cls.S32,
             "hal_u32": cls.U32,
+            "hal_s64": cls.S64,
+            "hal_u64": cls.U64,
             "hal_float": cls.FLOAT,
             "hal_bit": cls.BIT,
         }
@@ -50,6 +54,7 @@ class Parameter:
     data_type: DataType
     value: str = "0"
     description: str = ""
+    writable: bool = True
 
 
 @dataclass
@@ -287,6 +292,7 @@ class WiringProject:
                             "data_type": p.data_type.value,
                             "value": p.value,
                             "description": p.description,
+                            "writable": p.writable,
                         }
                         for p in node.parameters.values()
                     ],
@@ -334,6 +340,7 @@ class WiringProject:
                     data_type=DataType.parse(raw_parameter["data_type"]),
                     value=str(raw_parameter.get("value", "0")),
                     description=raw_parameter.get("description", ""),
+                    writable=bool(raw_parameter.get("writable", True)),
                 )
                 node.parameters[parameter.name] = parameter
             project.add_node(node)

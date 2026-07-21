@@ -3,7 +3,15 @@ import tempfile
 import unittest
 
 from cia402_gui.generator import generate_hal
-from cia402_gui.model import DataType, Direction, Node, Port, WiringError, WiringProject
+from cia402_gui.model import (
+    DataType,
+    Direction,
+    Node,
+    Parameter,
+    Port,
+    WiringError,
+    WiringProject,
+)
 from cia402_gui.parsers import (
     _nodes_from_pin_info,
     attach_component_parameters,
@@ -99,10 +107,48 @@ class ParserTests(unittest.TestCase):
         attach_component_parameters(
             nodes,
             ROOT / "cia402.comp",
-            {"cia402.0.pos-scale": (DataType.FLOAT, "10000000.0")},
+            {
+                "cia402.0.pos-scale": Parameter(
+                    name="cia402.0.pos-scale",
+                    full_name="cia402.0.pos-scale",
+                    data_type=DataType.FLOAT,
+                    value="10000000.0",
+                    writable=True,
+                )
+            },
         )
 
         self.assertEqual(nodes[0].parameters["pos-scale"].value, "10000000.0")
+
+    def test_all_live_parameters_attach_to_their_matching_blocks(self):
+        nodes = (
+            create_joint_nodes(1)
+            + parse_comp(ROOT / "cia402.comp", 1)
+            + parse_ethercat_xml(ROOT / "example" / "ethercat-conf.xml")
+        )
+        live = {
+            "joint.0.example-rw": Parameter(
+                name="joint.0.example-rw",
+                full_name="joint.0.example-rw",
+                data_type=DataType.FLOAT,
+                value="12.5",
+                writable=True,
+            ),
+            "lcec.0.0.example-ro": Parameter(
+                name="lcec.0.0.example-ro",
+                full_name="lcec.0.0.example-ro",
+                data_type=DataType.U32,
+                value="7",
+                writable=False,
+            ),
+        }
+
+        attach_component_parameters(nodes, ROOT / "cia402.comp", live)
+        by_id = {node.node_id: node for node in nodes}
+
+        self.assertEqual(by_id["joint.0"].parameters["example-rw"].value, "12.5")
+        self.assertTrue(by_id["joint.0"].parameters["example-rw"].writable)
+        self.assertFalse(by_id["lcec.0.0"].parameters["example-ro"].writable)
 
 
 class WiringTests(unittest.TestCase):
@@ -269,6 +315,27 @@ class WiringTests(unittest.TestCase):
 
         with self.assertRaisesRegex(WiringError, "Invalid parameter value"):
             generate_hal(self.project)
+
+    def test_only_writable_parameters_are_emitted(self):
+        self.joint.parameters["rw-example"] = Parameter(
+            name="rw-example",
+            full_name="joint.0.rw-example",
+            data_type=DataType.S32,
+            value="42",
+            writable=True,
+        )
+        self.joint.parameters["ro-example"] = Parameter(
+            name="ro-example",
+            full_name="joint.0.ro-example",
+            data_type=DataType.S32,
+            value="99",
+            writable=False,
+        )
+
+        output = generate_hal(self.project)
+
+        self.assertIn("setp joint.0.rw-example", output)
+        self.assertNotIn("setp joint.0.ro-example", output)
 
 
 if __name__ == "__main__":
