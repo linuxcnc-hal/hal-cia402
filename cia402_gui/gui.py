@@ -626,6 +626,21 @@ class AvailableBlocksDock(QtWidgets.QDockWidget):
 
 
 class BlockSignalsDock(QtWidgets.QDockWidget):
+    DIRECTION_GROUPS = (
+        (Direction.INPUT, "Inputs"),
+        (Direction.OUTPUT, "Outputs"),
+        (Direction.IO, "Bidirectional"),
+    )
+    TYPE_ORDER = (
+        DataType.BIT,
+        DataType.FLOAT,
+        DataType.S32,
+        DataType.U32,
+        DataType.S64,
+        DataType.U64,
+        DataType.UNKNOWN,
+    )
+
     def __init__(self, window: "MainWindow") -> None:
         super().__init__("Block signals", window)
         self.window = window
@@ -641,7 +656,8 @@ class BlockSignalsDock(QtWidgets.QDockWidget):
         layout.addWidget(self.filter)
 
         layout.addWidget(QtWidgets.QLabel("Available signals"))
-        self.available = QtWidgets.QListWidget()
+        self.available = QtWidgets.QTreeWidget()
+        self.available.setHeaderHidden(True)
         self.available.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.available.itemDoubleClicked.connect(self.add_selected)
         layout.addWidget(self.available)
@@ -650,7 +666,8 @@ class BlockSignalsDock(QtWidgets.QDockWidget):
         layout.addWidget(add_button)
 
         layout.addWidget(QtWidgets.QLabel("Signals shown on block"))
-        self.visible = QtWidgets.QListWidget()
+        self.visible = QtWidgets.QTreeWidget()
+        self.visible.setHeaderHidden(True)
         self.visible.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.visible.itemDoubleClicked.connect(self.remove_selected)
         layout.addWidget(self.visible)
@@ -665,16 +682,52 @@ class BlockSignalsDock(QtWidgets.QDockWidget):
         if node_id:
             self.raise_()
 
-    def _add_item(self, target, port: Port) -> None:
+    def _signal_text(self, port: Port) -> str:
         connected = self.window.project._signal_for_port(port.full_name)
         suffix = "  [connected]" if connected else ""
-        item = QtWidgets.QListWidgetItem(
-            "%s  [%s %s]%s"
-            % (port.name, port.direction.value, port.data_type.value, suffix)
+        return "%s%s" % (port.name, suffix)
+
+    @staticmethod
+    def _group_item(text: str, parent=None):
+        item = (
+            QtWidgets.QTreeWidgetItem(parent, [text])
+            if parent is not None
+            else QtWidgets.QTreeWidgetItem([text])
         )
-        item.setData(QtCore.Qt.UserRole, port.name)
-        item.setToolTip("%s\n%s" % (port.full_name, port.description))
-        target.addItem(item)
+        item.setFlags(item.flags() & ~QtCore.Qt.ItemIsSelectable)
+        font = item.font(0)
+        font.setBold(True)
+        item.setFont(0, font)
+        return item
+
+    def _populate_tree(self, tree, ports) -> None:
+        grouped = {}
+        for port in ports:
+            grouped.setdefault(port.direction, {}).setdefault(port.data_type, []).append(port)
+
+        for direction, direction_label in self.DIRECTION_GROUPS:
+            by_type = grouped.get(direction, {})
+            direction_count = sum(len(items) for items in by_type.values())
+            if not direction_count:
+                continue
+            direction_item = self._group_item(
+                "%s (%d)" % (direction_label, direction_count)
+            )
+            tree.addTopLevelItem(direction_item)
+            for data_type in self.TYPE_ORDER:
+                typed_ports = sorted(by_type.get(data_type, []), key=lambda item: item.name)
+                if not typed_ports:
+                    continue
+                type_item = self._group_item(
+                    "%s (%d)" % (data_type.value, len(typed_ports)), direction_item
+                )
+                type_item.setForeground(0, QtGui.QBrush(TYPE_COLORS[data_type]))
+                for port in typed_ports:
+                    item = QtWidgets.QTreeWidgetItem(type_item, [self._signal_text(port)])
+                    item.setForeground(0, QtGui.QBrush(TYPE_COLORS[data_type]))
+                    item.setData(0, QtCore.Qt.UserRole, port.name)
+                    item.setToolTip(0, "%s\n%s" % (port.full_name, port.description))
+        tree.expandAll()
 
     def refresh(self) -> None:
         self.available.clear()
@@ -685,11 +738,15 @@ class BlockSignalsDock(QtWidgets.QDockWidget):
             return
         self.block_label.setText(node.node_id)
         search = self.filter.text().strip().lower()
-        for port in sorted(node.ports.values(), key=lambda item: item.name):
+        available_ports = []
+        visible_ports = []
+        for port in node.ports.values():
             searchable = "%s %s %s" % (port.name, port.full_name, port.description)
             if search and search not in searchable.lower():
                 continue
-            self._add_item(self.visible if port.visible else self.available, port)
+            (visible_ports if port.visible else available_ports).append(port)
+        self._populate_tree(self.available, available_ports)
+        self._populate_tree(self.visible, visible_ports)
 
     def _set_selected(self, source_list, visible: bool) -> None:
         if not self.node_id:
@@ -697,24 +754,26 @@ class BlockSignalsDock(QtWidgets.QDockWidget):
         items = source_list.selectedItems()
         if not items and source_list.currentItem():
             items = [source_list.currentItem()]
-        if not items:
+        port_names = [item.data(0, QtCore.Qt.UserRole) for item in items]
+        port_names = [name for name in port_names if name]
+        if not port_names:
             return
-        for item in items:
+        for port_name in port_names:
             self.window.project.set_port_visible(
-                self.node_id, item.data(QtCore.Qt.UserRole), visible
+                self.node_id, port_name, visible
             )
         self.window.scene.rebuild()
         self.window.project_modified()
         self.window.scene.focus_block_signals(self.node_id)
         self.refresh()
 
-    def add_selected(self, item=None) -> None:
-        if isinstance(item, QtWidgets.QListWidgetItem):
+    def add_selected(self, item=None, column=0) -> None:
+        if isinstance(item, QtWidgets.QTreeWidgetItem) and item.data(0, QtCore.Qt.UserRole):
             item.setSelected(True)
         self._set_selected(self.available, True)
 
-    def remove_selected(self, item=None) -> None:
-        if isinstance(item, QtWidgets.QListWidgetItem):
+    def remove_selected(self, item=None, column=0) -> None:
+        if isinstance(item, QtWidgets.QTreeWidgetItem) and item.data(0, QtCore.Qt.UserRole):
             item.setSelected(True)
         self._set_selected(self.visible, False)
 

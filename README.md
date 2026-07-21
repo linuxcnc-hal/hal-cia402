@@ -61,7 +61,9 @@ or press **Add selected** to place only the pins you need on the block. Remove
 shown pins from the same panel, or right-click a pin and choose **Remove signal
 from block**. If a connected pin is removed, its HAL connection is suspended
 and is restored when the pin is added again. Older saved projects retain their
-existing visible-pin layout.
+existing visible-pin layout. Signal lists are grouped first by direction
+(Inputs, Outputs, and Bidirectional) and then by HAL type (`bit`, `float`,
+`s32`, `u32`, `s64`, and `u64`). Each group displays its signal count.
 
 Select a block and press **Delete**, or right-click it and choose **Remove
 block**, to remove it from the canvas. Removed blocks appear in the
