@@ -64,6 +64,13 @@ wire from `From <signal>` at every reader. HAL export still emits one ordinary
 wire to convert it to Goto/From display, or right-click a tag to return to a
 direct wire. Goto/From display mode is saved with the project.
 
+Goto and From tags can also be selected and removed with **Delete** or their
+context menus. Deleting a Goto removes the complete HAL signal and all its From
+tags. Deleting a From disconnects only that reader. Deleting a direct wire has
+the same per-reader behavior. If the final reader is disconnected, the unused
+HAL signal is deleted automatically; fan-out signals remain while at least one
+reader is still connected.
+
 An XML file can still be opened directly from the command line:
 
 ```bash

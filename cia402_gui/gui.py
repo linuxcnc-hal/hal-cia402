@@ -318,9 +318,15 @@ class WireItem(QtWidgets.QGraphicsPathItem):
     def contextMenuEvent(self, event) -> None:
         menu = QtWidgets.QMenu()
         route_action = menu.addAction("Display as Goto/From")
+        menu.addSeparator()
+        disconnect_action = menu.addAction("Disconnect wire")
         selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
         if selected == route_action:
             self.scene().set_signal_routed(self.signal_name, True)
+        elif selected == disconnect_action:
+            self.scene().disconnect_destination(
+                self.signal_name, self.destination.port.full_name
+            )
         event.accept()
 
 
@@ -337,6 +343,7 @@ class RouteTagItem(QtWidgets.QGraphicsRectItem):
         color = TYPE_COLORS[endpoint.port.data_type]
         self.setPen(QtGui.QPen(color, 2.0))
         self.setZValue(2)
+        self.setFlag(QtWidgets.QGraphicsItem.ItemIsSelectable, True)
         label = QtWidgets.QGraphicsSimpleTextItem(
             "%s  %s" % ("Goto" if kind == "goto" else "From", signal_name), self
         )
@@ -370,14 +377,22 @@ class RouteTagItem(QtWidgets.QGraphicsRectItem):
         direct_action = None
         if signal and signal.destinations:
             direct_action = menu.addAction("Display as direct wire")
-        delete_action = menu.addAction("Delete HAL signal")
+        menu.addSeparator()
+        delete_action = menu.addAction(
+            "Delete Goto and HAL signal"
+            if self.kind == "goto"
+            else "Delete this From block"
+        )
         selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
         if direct_action is not None and selected == direct_action:
             self.scene().set_signal_routed(self.signal_name, False)
         elif selected == delete_action:
-            self.scene().project.remove_signal(self.signal_name)
-            self.scene().rebuild_wires()
-            self.scene().project_changed.emit()
+            if self.kind == "goto":
+                self.scene().delete_signal(self.signal_name)
+            else:
+                self.scene().disconnect_destination(
+                    self.signal_name, self.endpoint.port.full_name
+                )
         event.accept()
 
 
@@ -586,12 +601,14 @@ class WiringScene(QtWidgets.QGraphicsScene):
             self.project_changed.emit()
 
     def delete_selected_wires(self) -> None:
-        names = {
-            item.signal_name for item in self.selectedItems() if isinstance(item, WireItem)
+        connections = {
+            (item.signal_name, item.destination.port.full_name)
+            for item in self.selectedItems()
+            if isinstance(item, WireItem)
         }
-        for name in names:
-            self.project.remove_signal(name)
-        if names:
+        for signal_name, destination_name in connections:
+            self.project.disconnect_destination(signal_name, destination_name)
+        if connections:
             self.rebuild_wires()
             self.project_changed.emit()
 
@@ -680,6 +697,16 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.rebuild_wires()
         self.project_changed.emit()
 
+    def delete_signal(self, signal_name: str) -> None:
+        self.project.remove_signal(signal_name)
+        self.rebuild_wires()
+        self.project_changed.emit()
+
+    def disconnect_destination(self, signal_name: str, destination_name: str) -> None:
+        self.project.disconnect_destination(signal_name, destination_name)
+        self.rebuild_wires()
+        self.project_changed.emit()
+
     def focus_block_signals(self, node_id: str) -> None:
         node_item = self.node_items.get(node_id)
         if node_item:
@@ -690,17 +717,34 @@ class WiringScene(QtWidgets.QGraphicsScene):
             parent.show_block_signals(node_id)
 
     def delete_selected_items(self) -> None:
-        signal_names = {
-            item.signal_name for item in self.selectedItems() if isinstance(item, WireItem)
+        selected = self.selectedItems()
+        goto_signals = {
+            item.signal_name
+            for item in selected
+            if isinstance(item, RouteTagItem) and item.kind == "goto"
         }
+        connections = {
+            (item.signal_name, item.destination.port.full_name)
+            for item in selected
+            if isinstance(item, WireItem)
+        }
+        connections.update(
+            {
+                (item.signal_name, item.endpoint.port.full_name)
+                for item in selected
+                if isinstance(item, RouteTagItem) and item.kind == "from"
+            }
+        )
         node_ids = {
-            item.node.node_id for item in self.selectedItems() if isinstance(item, NodeItem)
+            item.node.node_id for item in selected if isinstance(item, NodeItem)
         }
-        for name in signal_names:
-            self.project.remove_signal(name)
+        for signal_name in goto_signals:
+            self.project.remove_signal(signal_name)
+        for signal_name, destination_name in connections:
+            self.project.disconnect_destination(signal_name, destination_name)
         for node_id in node_ids:
             self.project.deactivate_node(node_id)
-        if signal_names or node_ids:
+        if goto_signals or connections or node_ids:
             self.rebuild()
             self.project_changed.emit()
 

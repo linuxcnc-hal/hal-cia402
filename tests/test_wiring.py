@@ -232,6 +232,42 @@ class WiringTests(unittest.TestCase):
 
         self.assertTrue(restored.signals["x-pos-command"].routed)
 
+    def test_disconnecting_final_wire_deletes_hal_signal(self):
+        self.project.connect(
+            "joint.0.motor-pos-cmd", "cia402.0.pos-cmd", "x-pos-command"
+        )
+
+        self.project.disconnect_destination("x-pos-command", "cia402.0.pos-cmd")
+
+        self.assertNotIn("x-pos-command", self.project.signals)
+
+    def test_disconnecting_one_fanout_branch_keeps_hal_signal(self):
+        signal = self.project.connect(
+            "joint.0.amp-enable-out", "cia402.0.enable", "x-enable"
+        )
+        consumer = Node(node_id="consumer", title="consumer", kind="test")
+        consumer.ports["enable"] = Port(
+            name="enable",
+            full_name="consumer.enable",
+            direction=Direction.INPUT,
+            data_type=DataType.BIT,
+        )
+        self.project.add_node(consumer)
+        self.project.connect("joint.0.amp-enable-out", "consumer.enable")
+
+        self.project.disconnect_destination("x-enable", "consumer.enable")
+
+        self.assertIn("x-enable", self.project.signals)
+        self.assertEqual(signal.destinations, ["cia402.0.enable"])
+
+    def test_deleting_goto_deletes_all_from_connections(self):
+        self.project.create_goto("joint.0.motor-pos-cmd", "x-pos-command")
+        self.project.connect_from("x-pos-command", "cia402.0.pos-cmd")
+
+        self.project.remove_signal("x-pos-command")
+
+        self.assertNotIn("x-pos-command", self.project.signals)
+
     def test_output_to_output_is_rejected(self):
         with self.assertRaisesRegex(WiringError, "two output"):
             self.project.connect(

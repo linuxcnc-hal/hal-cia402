@@ -254,6 +254,17 @@ class WiringProject:
     def remove_signal(self, name: str) -> None:
         self.signals.pop(name, None)
 
+    def disconnect_destination(self, signal_name: str, destination_name: str) -> None:
+        """Disconnect one reader and remove an orphaned HAL signal."""
+
+        signal = self.signals.get(signal_name)
+        if signal is None:
+            return
+        if destination_name in signal.destinations:
+            signal.destinations.remove(destination_name)
+        if not signal.destinations:
+            self.signals.pop(signal_name, None)
+
     def deactivate_node(self, node_id: str) -> None:
         if node_id not in self.nodes:
             raise WiringError("Unknown block: %s" % node_id)
