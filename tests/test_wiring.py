@@ -4,7 +4,13 @@ import unittest
 
 from cia402_gui.generator import generate_hal
 from cia402_gui.model import DataType, Direction, Node, Port, WiringError, WiringProject
-from cia402_gui.parsers import create_joint_nodes, parse_comp, parse_ethercat_xml
+from cia402_gui.parsers import (
+    _nodes_from_pin_info,
+    attach_component_parameters,
+    create_joint_nodes,
+    parse_comp,
+    parse_ethercat_xml,
+)
 from cia402_gui.project_io import load_project, save_project
 
 
@@ -42,6 +48,61 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(node.ports["motor-pos-cmd"].direction, Direction.OUTPUT)
         self.assertEqual(node.ports["motor-pos-fb"].direction, Direction.INPUT)
         self.assertEqual(node.ports["index-enable"].direction, Direction.IO)
+
+    def test_live_hal_pin_information_creates_real_joint_and_cia_nodes(self):
+        nodes = _nodes_from_pin_info(
+            [
+                {
+                    "NAME": "joint.0.motor-pos-cmd",
+                    "TYPE": "float",
+                    "DIRECTION": "OUT",
+                },
+                {
+                    "NAME": "joint.0.motor-pos-fb",
+                    "TYPE": "float",
+                    "DIRECTION": "IN",
+                },
+                {
+                    "NAME": "cia402.0.pos-cmd",
+                    "TYPE": "float",
+                    "DIRECTION": "IN",
+                },
+                {
+                    "NAME": "unrelated.pin",
+                    "TYPE": "bit",
+                    "DIRECTION": "OUT",
+                },
+            ]
+        )
+
+        by_id = {node.node_id: node for node in nodes}
+        self.assertEqual(set(by_id), {"joint.0", "cia402.0"})
+        self.assertEqual(
+            by_id["joint.0"].ports["motor-pos-cmd"].direction,
+            Direction.OUTPUT,
+        )
+        self.assertEqual(
+            by_id["cia402.0"].ports["pos-cmd"].direction,
+            Direction.INPUT,
+        )
+
+    def test_live_component_parameters_replace_source_defaults(self):
+        nodes = _nodes_from_pin_info(
+            [
+                {
+                    "NAME": "cia402.0.pos-cmd",
+                    "TYPE": "float",
+                    "DIRECTION": "IN",
+                }
+            ]
+        )
+        attach_component_parameters(
+            nodes,
+            ROOT / "cia402.comp",
+            {"cia402.0.pos-scale": (DataType.FLOAT, "10000000.0")},
+        )
+
+        self.assertEqual(nodes[0].parameters["pos-scale"].value, "10000000.0")
 
 
 class WiringTests(unittest.TestCase):

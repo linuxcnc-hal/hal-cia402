@@ -23,13 +23,19 @@ Install the Qt dependency on a LinuxCNC Debian installation:
 sudo apt install python3-pyqt5
 ```
 
-Start the editor with the included example:
+Start the editor while LinuxCNC is running:
 
 ```bash
 python3 -m cia402_gui
 ```
 
-Or open a particular EtherCAT configuration:
+The editor automatically discovers the loaded `joint.N.*` and `cia402.N.*`
+pins and current `cia402` parameter values. Use **File > Import EtherCAT XML**
+to select `ethercat-conf.xml`; no joint or component counts are required.
+Discovery uses the LinuxCNC Python HAL API and falls back to `halcmd` on older
+installations. Press **F5** to refresh the live HAL blocks.
+
+An XML file can still be opened directly from the command line:
 
 ```bash
 python3 -m cia402_gui \

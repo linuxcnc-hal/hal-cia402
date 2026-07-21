@@ -19,7 +19,13 @@ except ImportError:
 
 from .generator import generate_hal, write_hal
 from .model import DataType, Direction, Node, Port, WiringError, WiringProject
-from .parsers import create_joint_nodes, parse_comp, parse_ethercat_xml
+from .parsers import (
+    attach_component_parameters,
+    create_joint_nodes,
+    discover_live_hal,
+    parse_comp,
+    parse_ethercat_xml,
+)
 from .project_io import load_project, save_project
 
 
@@ -46,27 +52,61 @@ NODE_COLORS = {
 }
 
 
-def build_project(xml_path: Path, comp_path: Path, joint_count: int, instance_count: int) -> WiringProject:
+def _layout_and_add(project: WiringProject, nodes, x_position: float, vertical_spacing: float) -> None:
+    for index, node in enumerate(nodes):
+        node.position = (x_position, index * vertical_spacing)
+        project.add_node(node)
+
+
+def build_runtime_project(comp_path: Path) -> WiringProject:
+    """Create the initial canvas from a running LinuxCNC HAL."""
+
+    project = WiringProject()
+    project.source_files = {"component": str(Path(comp_path).resolve())}
+    live_nodes, live_parameters = discover_live_hal()
+    attach_component_parameters(live_nodes, comp_path, live_parameters)
+    vertical_spacing = max((len(node.ports) for node in live_nodes), default=1) * 22.0 + 100.0
+    _layout_and_add(
+        project, [node for node in live_nodes if node.kind == "joint"], 0.0, vertical_spacing
+    )
+    _layout_and_add(
+        project, [node for node in live_nodes if node.kind == "cia402"], 380.0, vertical_spacing
+    )
+    return project
+
+
+def build_project(
+    xml_path: Path,
+    comp_path: Path,
+    joint_count: Optional[int] = None,
+    instance_count: Optional[int] = None,
+) -> WiringProject:
+    """Build a canvas from live HAL pins plus one EtherCAT XML file."""
+
     project = WiringProject()
     project.source_files = {
         "ethercat_xml": str(Path(xml_path).resolve()),
         "component": str(Path(comp_path).resolve()),
     }
-    joints = create_joint_nodes(joint_count)
-    components = parse_comp(comp_path, instance_count)
     ethercat_nodes = parse_ethercat_xml(xml_path)
+    live_nodes, live_parameters = discover_live_hal()
+    joints = [node for node in live_nodes if node.kind == "joint"]
+    components = [node for node in live_nodes if node.kind == "cia402"]
+
+    if not joints:
+        inferred_joint_count = joint_count or max(1, len(ethercat_nodes))
+        joints = create_joint_nodes(inferred_joint_count)
+    if components:
+        attach_component_parameters(components, comp_path, live_parameters)
+    else:
+        inferred_instance_count = instance_count or max(1, len(joints), len(ethercat_nodes))
+        components = parse_comp(comp_path, inferred_instance_count)
+
     all_nodes = joints + components + ethercat_nodes
     vertical_spacing = max((len(node.ports) for node in all_nodes), default=1) * 22.0 + 100.0
-
-    for index, node in enumerate(joints):
-        node.position = (0.0, index * vertical_spacing)
-        project.add_node(node)
-    for index, node in enumerate(components):
-        node.position = (380.0, index * vertical_spacing)
-        project.add_node(node)
-    for index, node in enumerate(ethercat_nodes):
-        node.position = (760.0, index * vertical_spacing)
-        project.add_node(node)
+    _layout_and_add(project, joints, 0.0, vertical_spacing)
+    _layout_and_add(project, components, 380.0, vertical_spacing)
+    _layout_and_add(project, ethercat_nodes, 760.0, vertical_spacing)
     return project
 
 
@@ -420,8 +460,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._create_actions()
         self._create_menus()
         self.statusBar().showMessage(
-            "Drag between compatible ports. Ctrl+wheel zooms; Delete removes selected wires."
+            self._startup_status()
         )
+
+    def _startup_status(self) -> str:
+        joint_count = sum(node.kind == "joint" for node in self.project.nodes.values())
+        cia_count = sum(node.kind == "cia402" for node in self.project.nodes.values())
+        if joint_count or cia_count:
+            return (
+                "Live HAL: %d joint block(s), %d cia402 block(s). Import EtherCAT XML to continue."
+                % (joint_count, cia_count)
+            )
+        return "LinuxCNC HAL was not detected. Import EtherCAT XML to create an offline layout."
 
     def _set_project(self, project: WiringProject) -> None:
         self.project = project
@@ -438,9 +488,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.signal_dock.refresh()
 
     def _create_actions(self) -> None:
-        self.new_action = QAction("New from EtherCAT XML…", self)
+        self.new_action = QAction("Import EtherCAT XML…", self)
         self.new_action.setShortcut("Ctrl+N")
         self.new_action.triggered.connect(self.new_from_xml)
+        self.refresh_action = QAction("Refresh live LinuxCNC HAL", self)
+        self.refresh_action.setShortcut("F5")
+        self.refresh_action.triggered.connect(self.refresh_live_hal)
         self.open_action = QAction("Open project…", self)
         self.open_action.setShortcut("Ctrl+O")
         self.open_action.triggered.connect(self.open_project)
@@ -465,6 +518,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("File")
         file_menu.addAction(self.new_action)
+        file_menu.addAction(self.refresh_action)
         file_menu.addAction(self.open_action)
         file_menu.addSeparator()
         file_menu.addAction(self.save_action)
@@ -506,18 +560,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if not filename:
             return
-        joints, accepted = QtWidgets.QInputDialog.getInt(
-            self, "Joint count", "Number of LinuxCNC joints:", 1, 1, 16
-        )
-        if not accepted:
-            return
-        instances, accepted = QtWidgets.QInputDialog.getInt(
-            self, "CiA 402 instances", "Number of cia402 instances:", joints, 1, 16
-        )
-        if not accepted:
-            return
         try:
-            project = build_project(Path(filename), self.comp_path, joints, instances)
+            project = build_project(Path(filename), self.comp_path)
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Cannot load configuration", str(exc))
             return
@@ -525,6 +569,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.project_path = None
         self.dirty = False
         self.setWindowTitle("CiA 402 HAL Wiring Editor")
+        self.statusBar().showMessage(
+            "Imported %s. Drag between ports to create HAL signals." % filename, 8000
+        )
+
+    def refresh_live_hal(self) -> None:
+        if not self._confirm_discard():
+            return
+        xml_path = self.project.source_files.get("ethercat_xml")
+        try:
+            if xml_path:
+                project = build_project(Path(xml_path), self.comp_path)
+            else:
+                project = build_runtime_project(self.comp_path)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Cannot read LinuxCNC HAL", str(exc))
+            return
+        self._set_project(project)
+        self.project_path = None
+        self.dirty = False
+        self.setWindowTitle("CiA 402 HAL Wiring Editor")
+        self.statusBar().showMessage(self._startup_status(), 8000)
 
     def open_project(self) -> None:
         if not self._confirm_discard():
