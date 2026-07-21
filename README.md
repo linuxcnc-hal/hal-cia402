@@ -268,6 +268,17 @@ python3 -m pip install -e .
 cia402-wiring-gui
 ```
 
+<h2>Support this project</h2>
+
+<p>
+  If <code>hal-cia402</code> saves you time or helps with your LinuxCNC setup,
+  you can support its continued development:
+</p>
+
+<a href="https://www.buymeacoffee.com/eshamsaki">
+  <img src="https://img.shields.io/badge/Buy_Me_a_Coffee-Support_Development-FFDD00?style=for-the-badge&amp;logo=buy-me-a-coffee&amp;logoColor=000000" alt="Buy Me a Coffee">
+</a>
+
 ## License
 
 This project is distributed under the GNU General Public License. See
