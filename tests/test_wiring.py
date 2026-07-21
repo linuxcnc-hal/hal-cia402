@@ -344,6 +344,20 @@ class WiringTests(unittest.TestCase):
             "10000000",
         )
 
+    def test_visual_notes_round_trip_without_affecting_hal(self):
+        before = generate_hal(self.project)
+        note = self.project.add_note("Drive moved to cabinet B", (125.5, -40.0))
+
+        restored = WiringProject.from_dict(self.project.to_dict())
+
+        self.assertEqual(restored.notes[note.note_id].text, note.text)
+        self.assertEqual(restored.notes[note.note_id].position, (125.5, -40.0))
+        self.assertEqual(generate_hal(self.project), before)
+        self.assertEqual(generate_hal(restored), before)
+
+        restored.remove_note(note.note_id)
+        self.assertNotIn(note.note_id, restored.notes)
+
     def test_removing_and_restoring_block_suspends_and_restores_wiring(self):
         self.project.connect(
             "joint.0.motor-pos-cmd", "cia402.0.pos-cmd", "x-pos-cmd"

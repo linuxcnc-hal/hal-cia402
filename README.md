@@ -191,6 +191,14 @@ Use **File > Save Project** to store the canvas as JSON and **File > Open
 Project** to restore it. Projects retain block positions, selected pins,
 parameter edits, signal routes, and suspended connections.
 
+### Visual notes
+
+Right-click an empty area of the canvas and choose **Add visual note here**, or
+use **Wiring > Add visual note** (`Ctrl+Shift+N`), to place a small comment near
+the blocks. Notes can be moved, double-clicked to edit, and removed with
+**Delete** or their context menu. They are saved in the JSON project for future
+reference but are ignored by HAL validation, preview, and export.
+
 ## Manual HAL wiring example
 
 The following example connects one LinuxCNC joint through `cia402.0` to one

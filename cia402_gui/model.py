@@ -76,6 +76,13 @@ class Signal:
     routed: bool = False
 
 
+@dataclass
+class Note:
+    note_id: str
+    text: str
+    position: Tuple[float, float] = (0.0, 0.0)
+
+
 class WiringError(ValueError):
     pass
 
@@ -87,7 +94,23 @@ class WiringProject:
     def __init__(self) -> None:
         self.nodes: Dict[str, Node] = {}
         self.signals: Dict[str, Signal] = {}
+        self.notes: Dict[str, Note] = {}
         self.source_files: Dict[str, str] = {}
+
+    def add_note(self, text: str, position: Tuple[float, float]) -> Note:
+        number = 1
+        while "note-%d" % number in self.notes:
+            number += 1
+        note = Note(
+            note_id="note-%d" % number,
+            text=str(text),
+            position=(float(position[0]), float(position[1])),
+        )
+        self.notes[note.note_id] = note
+        return note
+
+    def remove_note(self, note_id: str) -> None:
+        self.notes.pop(note_id, None)
 
     @property
     def ports(self) -> Dict[str, Port]:
@@ -412,7 +435,7 @@ class WiringProject:
 
     def to_dict(self) -> dict:
         return {
-            "version": 1,
+            "version": 2,
             "source_files": self.source_files,
             "nodes": [
                 {
@@ -454,6 +477,14 @@ class WiringProject:
                     "routed": signal.routed,
                 }
                 for signal in self.signals.values()
+            ],
+            "notes": [
+                {
+                    "note_id": note.note_id,
+                    "text": note.text,
+                    "position": list(note.position),
+                }
+                for note in self.notes.values()
             ],
         }
 
@@ -500,4 +531,11 @@ class WiringProject:
                 routed=bool(raw_signal.get("routed", False)),
             )
             project.signals[signal.name] = signal
+        for raw_note in data.get("notes", []):
+            note = Note(
+                note_id=str(raw_note["note_id"]),
+                text=str(raw_note.get("text", "")),
+                position=tuple(raw_note.get("position", (0.0, 0.0))),
+            )
+            project.notes[note.note_id] = note
         return project

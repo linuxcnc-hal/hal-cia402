@@ -18,7 +18,7 @@ except ImportError:
         ) from exc
 
 from .generator import generate_hal, write_hal
-from .model import DataType, Direction, Node, Port, WiringError, WiringProject
+from .model import DataType, Direction, Node, Note, Port, WiringError, WiringProject
 from .parsers import (
     attach_component_parameters,
     create_joint_nodes,
@@ -416,6 +416,60 @@ class RouteStubItem(QtWidgets.QGraphicsPathItem):
         self.setPath(path)
 
 
+class NoteItem(QtWidgets.QGraphicsRectItem):
+    WIDTH = 210.0
+
+    def __init__(self, note: Note, editor: "WiringScene") -> None:
+        super().__init__()
+        self.note = note
+        self.editor = editor
+        self.text_item = QtWidgets.QGraphicsTextItem(note.text, self)
+        self.text_item.setDefaultTextColor(QtGui.QColor("#24292f"))
+        self.text_item.setTextWidth(self.WIDTH - 18.0)
+        font = self.text_item.font()
+        font.setPointSize(9)
+        self.text_item.setFont(font)
+        self.text_item.setPos(9.0, 5.0)
+        height = max(48.0, self.text_item.boundingRect().height() + 12.0)
+        self.setRect(0.0, 0.0, self.WIDTH, height)
+        self.setBrush(QtGui.QBrush(QtGui.QColor("#fff8c5")))
+        self.setPen(QtGui.QPen(QtGui.QColor("#d4a72c"), 1.2))
+        self.setFlags(
+            QtWidgets.QGraphicsItem.ItemIsMovable
+            | QtWidgets.QGraphicsItem.ItemIsSelectable
+            | QtWidgets.QGraphicsItem.ItemSendsGeometryChanges
+        )
+        self.setZValue(2)
+        self.setToolTip("Visual note only; it is not included in HAL export")
+        self.setPos(*note.position)
+
+    def itemChange(self, change, value):
+        if change == QtWidgets.QGraphicsItem.ItemPositionHasChanged:
+            self.note.position = (float(value.x()), float(value.y()))
+            if self.scene() is not None:
+                self.editor.layout_changed.emit()
+        return super().itemChange(change, value)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        self.editor.edit_note(self.note.note_id)
+        event.accept()
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QtWidgets.QMenu()
+        edit_action = menu.addAction("Edit note…")
+        delete_action = menu.addAction("Delete note")
+        selected = (
+            menu.exec(event.screenPos())
+            if hasattr(menu, "exec")
+            else menu.exec_(event.screenPos())
+        )
+        if selected == edit_action:
+            self.editor.edit_note(self.note.note_id)
+        elif selected == delete_action:
+            self.editor.remove_note(self.note.note_id)
+        event.accept()
+
+
 class WiringScene(QtWidgets.QGraphicsScene):
     project_changed = QtCore.pyqtSignal() if QT_BINDING == "PyQt5" else QtCore.Signal()
     layout_changed = QtCore.pyqtSignal() if QT_BINDING == "PyQt5" else QtCore.Signal()
@@ -428,6 +482,7 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.wire_items = []
         self.route_tags = []
         self.route_stubs = []
+        self.note_items: Dict[str, NoteItem] = {}
         self.connection_start: Optional[PortItem] = None
         self.preview_wire: Optional[QtWidgets.QGraphicsPathItem] = None
         self.rebuild()
@@ -439,6 +494,7 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.wire_items.clear()
         self.route_tags.clear()
         self.route_stubs.clear()
+        self.note_items.clear()
         for node in self.project.nodes.values():
             if not node.active:
                 continue
@@ -446,6 +502,10 @@ class WiringScene(QtWidgets.QGraphicsScene):
             self.addItem(item)
             self.node_items[node.node_id] = item
             self.port_items.update(item.port_items)
+        for note in self.project.notes.values():
+            item = NoteItem(note, self)
+            self.addItem(item)
+            self.note_items[note.note_id] = item
         self.rebuild_wires()
         self.setSceneRect(self.itemsBoundingRect().adjusted(-120, -120, 120, 120))
 
@@ -735,6 +795,56 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.rebuild_wires()
         self.project_changed.emit()
 
+    def add_note(self, position) -> None:
+        text, accepted = QtWidgets.QInputDialog.getMultiLineText(
+            self.views()[0],
+            "Add visual note",
+            "Note text (not included in HAL export):",
+        )
+        if not accepted or not str(text).strip():
+            return
+        self.project.add_note(
+            str(text).strip(), (float(position.x()), float(position.y()))
+        )
+        self.rebuild()
+        self.project_changed.emit()
+
+    def edit_note(self, note_id: str) -> None:
+        note = self.project.notes.get(note_id)
+        if note is None:
+            return
+        text, accepted = QtWidgets.QInputDialog.getMultiLineText(
+            self.views()[0], "Edit visual note", "Note text:", note.text
+        )
+        if not accepted:
+            return
+        if not str(text).strip():
+            self.remove_note(note_id)
+            return
+        note.text = str(text).strip()
+        self.rebuild()
+        self.project_changed.emit()
+
+    def remove_note(self, note_id: str) -> None:
+        self.project.remove_note(note_id)
+        self.rebuild()
+        self.project_changed.emit()
+
+    def contextMenuEvent(self, event) -> None:
+        if self.items(event.scenePos()):
+            super().contextMenuEvent(event)
+            return
+        menu = QtWidgets.QMenu()
+        add_action = menu.addAction("Add visual note here…")
+        selected = (
+            menu.exec(event.screenPos())
+            if hasattr(menu, "exec")
+            else menu.exec_(event.screenPos())
+        )
+        if selected == add_action:
+            self.add_note(event.scenePos())
+        event.accept()
+
     def focus_block_signals(self, node_id: str) -> None:
         node_item = self.node_items.get(node_id)
         if node_item:
@@ -766,13 +876,18 @@ class WiringScene(QtWidgets.QGraphicsScene):
         node_ids = {
             item.node.node_id for item in selected if isinstance(item, NodeItem)
         }
+        note_ids = {
+            item.note.note_id for item in selected if isinstance(item, NoteItem)
+        }
         for signal_name in goto_signals:
             self.project.remove_signal(signal_name)
         for signal_name, destination_name in connections:
             self.project.disconnect_destination(signal_name, destination_name)
         for node_id in node_ids:
             self.project.deactivate_node(node_id)
-        if goto_signals or connections or node_ids:
+        for note_id in note_ids:
+            self.project.remove_note(note_id)
+        if goto_signals or connections or node_ids or note_ids:
             self.rebuild()
             self.project_changed.emit()
 
@@ -1228,6 +1343,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.preview_action.triggered.connect(self.preview_hal)
         self.validate_action = QAction("Validate wiring", self)
         self.validate_action.triggered.connect(self.validate_project)
+        self.add_note_action = QAction("Add visual note…", self)
+        self.add_note_action.setShortcut("Ctrl+Shift+N")
+        self.add_note_action.triggered.connect(self.add_note_at_center)
         self.fit_action = QAction("Fit all blocks", self)
         self.fit_action.setShortcut("F")
         self.fit_action.triggered.connect(
@@ -1247,6 +1365,7 @@ class MainWindow(QtWidgets.QMainWindow):
         file_menu.addAction(self.export_action)
         edit_menu = self.menuBar().addMenu("Wiring")
         edit_menu.addAction(self.validate_action)
+        edit_menu.addAction(self.add_note_action)
         edit_menu.addAction(self.fit_action)
 
     def project_modified(self) -> None:
@@ -1272,6 +1391,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def show_block_signals(self, node_id: str) -> None:
         self.block_signals_dock.set_node(node_id)
+
+    def add_note_at_center(self) -> None:
+        center = self.view.mapToScene(self.view.viewport().rect().center())
+        self.scene.add_note(center)
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:
