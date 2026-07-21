@@ -243,6 +243,27 @@ class WiringTests(unittest.TestCase):
         self.assertNotIn("lcec.0.0.cia-statusword", restored.ports)
         self.assertIn("lcec.0.0.cia-statusword", restored.all_ports)
 
+    def test_hiding_and_showing_port_suspends_and_restores_signal(self):
+        self.project.connect(
+            "joint.0.motor-pos-cmd", "cia402.0.pos-cmd", "x-pos-cmd"
+        )
+
+        self.project.set_port_visible("cia402.0", "pos-cmd", False)
+        self.assertNotIn("net x-pos-cmd", generate_hal(self.project))
+        self.assertEqual(self.project.signals["x-pos-cmd"].source, "joint.0.motor-pos-cmd")
+
+        self.project.set_port_visible("cia402.0", "pos-cmd", True)
+        self.assertIn("net x-pos-cmd", generate_hal(self.project))
+
+    def test_hidden_port_state_is_saved_in_project(self):
+        self.project.set_port_visible("lcec.0.0", "actual-position", False)
+
+        restored = WiringProject.from_dict(self.project.to_dict())
+
+        self.assertFalse(restored.nodes["lcec.0.0"].ports["actual-position"].visible)
+        self.assertNotIn("lcec.0.0.actual-position", restored.ports)
+        self.assertIn("lcec.0.0.actual-position", restored.all_ports)
+
     def test_invalid_parameter_text_cannot_be_injected_into_hal(self):
         self.component.parameters["pos-scale"].value = "1\nnet injected"
 

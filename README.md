@@ -17,6 +17,7 @@ The editor provides:
 * Editable `cia402` parameters by double-clicking a component block.
 * Project save/load using JSON and deterministic `.hal` file export.
 * Reversible block removal with an Available Blocks palette.
+* Per-block signal selection so blocks start compact and only show requested pins.
 
 Install the Qt dependency on a LinuxCNC Debian installation:
 
@@ -49,6 +50,14 @@ python3 -m cia402_gui \
 Drag from one port to another and enter a HAL signal name. Double-click a
 `cia402` block to edit its parameters. Use **File > Preview HAL** to inspect
 the output and **File > Export HAL** to write `cia402-generated.hal`.
+
+Newly discovered and imported blocks initially show no signals. Select a block
+to open the **Block signals** panel, search its available pins, and double-click
+or press **Add selected** to place only the pins you need on the block. Remove
+shown pins from the same panel, or right-click a pin and choose **Remove signal
+from block**. If a connected pin is removed, its HAL connection is suspended
+and is restored when the pin is added again. Older saved projects retain their
+existing visible-pin layout.
 
 Select a block and press **Delete**, or right-click it and choose **Remove
 block**, to remove it from the canvas. Removed blocks appear in the

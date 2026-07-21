@@ -58,6 +58,12 @@ def _layout_and_add(project: WiringProject, nodes, x_position: float, vertical_s
         project.add_node(node)
 
 
+def _hide_all_ports(nodes) -> None:
+    for node in nodes:
+        for port in node.ports.values():
+            port.visible = False
+
+
 def build_runtime_project(comp_path: Path) -> WiringProject:
     """Create the initial canvas from a running LinuxCNC HAL."""
 
@@ -65,7 +71,8 @@ def build_runtime_project(comp_path: Path) -> WiringProject:
     project.source_files = {"component": str(Path(comp_path).resolve())}
     live_nodes, live_parameters = discover_live_hal()
     attach_component_parameters(live_nodes, comp_path, live_parameters)
-    vertical_spacing = max((len(node.ports) for node in live_nodes), default=1) * 22.0 + 100.0
+    _hide_all_ports(live_nodes)
+    vertical_spacing = 140.0
     _layout_and_add(
         project, [node for node in live_nodes if node.kind == "joint"], 0.0, vertical_spacing
     )
@@ -103,7 +110,8 @@ def build_project(
         components = parse_comp(comp_path, inferred_instance_count)
 
     all_nodes = joints + components + ethercat_nodes
-    vertical_spacing = max((len(node.ports) for node in all_nodes), default=1) * 22.0 + 100.0
+    _hide_all_ports(all_nodes)
+    vertical_spacing = 140.0
     _layout_and_add(project, joints, 0.0, vertical_spacing)
     _layout_and_add(project, components, 380.0, vertical_spacing)
     _layout_and_add(project, ethercat_nodes, 760.0, vertical_spacing)
@@ -120,6 +128,9 @@ def merge_project(target: WiringProject, incoming: WiringProject) -> None:
             continue
         new_node.active = old_node.active
         new_node.position = old_node.position
+        for name, port in new_node.ports.items():
+            if name in old_node.ports:
+                port.visible = old_node.ports[name].visible
         for name, parameter in new_node.parameters.items():
             if name in old_node.parameters:
                 parameter.value = old_node.parameters[name].value
@@ -161,6 +172,16 @@ class PortItem(QtWidgets.QGraphicsEllipseItem):
         self.scene().finish_connection(event.scenePos())
         event.accept()
 
+    def contextMenuEvent(self, event) -> None:
+        menu = QtWidgets.QMenu()
+        remove_action = menu.addAction("Remove signal from block")
+        selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
+        if selected == remove_action:
+            self.scene().set_port_visible(
+                self.node_item.node.node_id, self.port.name, False
+            )
+        event.accept()
+
 
 class NodeItem(QtWidgets.QGraphicsRectItem):
     WIDTH = 310.0
@@ -168,7 +189,8 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
     ROW = 22.0
 
     def __init__(self, node: Node, editor: "WiringScene") -> None:
-        height = self.HEADER + max(1, len(node.ports)) * self.ROW + 10.0
+        visible_ports = [port for port in node.ports.values() if port.visible]
+        height = self.HEADER + max(1, len(visible_ports)) * self.ROW + 10.0
         super().__init__(0.0, 0.0, self.WIDTH, height)
         self.node = node
         self.editor = editor
@@ -189,7 +211,12 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
         title.setBrush(QtGui.QBrush(QtGui.QColor("white")))
         title.setPos(10, 6)
 
-        for row, port in enumerate(node.ports.values()):
+        if not visible_ports:
+            empty_label = QtWidgets.QGraphicsSimpleTextItem("No signals selected", self)
+            empty_label.setBrush(QtGui.QBrush(QtGui.QColor("#8b949e")))
+            empty_label.setPos(12.0, self.HEADER + 5.0)
+
+        for row, port in enumerate(visible_ports):
             y = self.HEADER + 10.0 + row * self.ROW
             port_item = PortItem(port, self)
             label = QtWidgets.QGraphicsSimpleTextItem(
@@ -225,9 +252,13 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
 
     def contextMenuEvent(self, event) -> None:
         menu = QtWidgets.QMenu()
+        signals_action = menu.addAction("Manage block signals…")
+        menu.addSeparator()
         remove_action = menu.addAction("Remove block")
         selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
-        if selected == remove_action:
+        if selected == signals_action:
+            self.editor.focus_block_signals(self.node.node_id)
+        elif selected == remove_action:
             self.editor.remove_node(self.node.node_id)
         event.accept()
 
@@ -404,6 +435,21 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.rebuild()
         self.project_changed.emit()
 
+    def set_port_visible(self, node_id: str, port_name: str, visible: bool) -> None:
+        self.project.set_port_visible(node_id, port_name, visible)
+        self.rebuild()
+        self.project_changed.emit()
+        self.focus_block_signals(node_id)
+
+    def focus_block_signals(self, node_id: str) -> None:
+        node_item = self.node_items.get(node_id)
+        if node_item:
+            self.clearSelection()
+            node_item.setSelected(True)
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "show_block_signals"):
+            parent.show_block_signals(node_id)
+
     def delete_selected_items(self) -> None:
         signal_names = {
             item.signal_name for item in self.selectedItems() if isinstance(item, WireItem)
@@ -542,6 +588,100 @@ class AvailableBlocksDock(QtWidgets.QDockWidget):
             return
         self.window.scene.restore_node(item.data(QtCore.Qt.UserRole))
 
+
+class BlockSignalsDock(QtWidgets.QDockWidget):
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__("Block signals", window)
+        self.window = window
+        self.node_id: Optional[str] = None
+        container = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(container)
+        self.block_label = QtWidgets.QLabel("Select a block on the canvas")
+        self.block_label.setStyleSheet("font-weight: bold")
+        layout.addWidget(self.block_label)
+        self.filter = QtWidgets.QLineEdit()
+        self.filter.setPlaceholderText("Search signals…")
+        self.filter.textChanged.connect(self.refresh)
+        layout.addWidget(self.filter)
+
+        layout.addWidget(QtWidgets.QLabel("Available signals"))
+        self.available = QtWidgets.QListWidget()
+        self.available.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.available.itemDoubleClicked.connect(self.add_selected)
+        layout.addWidget(self.available)
+        add_button = QtWidgets.QPushButton("Add selected >")
+        add_button.clicked.connect(self.add_selected)
+        layout.addWidget(add_button)
+
+        layout.addWidget(QtWidgets.QLabel("Signals shown on block"))
+        self.visible = QtWidgets.QListWidget()
+        self.visible.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.visible.itemDoubleClicked.connect(self.remove_selected)
+        layout.addWidget(self.visible)
+        remove_button = QtWidgets.QPushButton("< Remove selected")
+        remove_button.clicked.connect(self.remove_selected)
+        layout.addWidget(remove_button)
+        self.setWidget(container)
+
+    def set_node(self, node_id: Optional[str]) -> None:
+        self.node_id = node_id
+        self.refresh()
+        if node_id:
+            self.raise_()
+
+    def _add_item(self, target, port: Port) -> None:
+        connected = self.window.project._signal_for_port(port.full_name)
+        suffix = "  [connected]" if connected else ""
+        item = QtWidgets.QListWidgetItem(
+            "%s  [%s %s]%s"
+            % (port.name, port.direction.value, port.data_type.value, suffix)
+        )
+        item.setData(QtCore.Qt.UserRole, port.name)
+        item.setToolTip("%s\n%s" % (port.full_name, port.description))
+        target.addItem(item)
+
+    def refresh(self) -> None:
+        self.available.clear()
+        self.visible.clear()
+        node = self.window.project.nodes.get(self.node_id or "")
+        if node is None or not node.active:
+            self.block_label.setText("Select a block on the canvas")
+            return
+        self.block_label.setText(node.node_id)
+        search = self.filter.text().strip().lower()
+        for port in sorted(node.ports.values(), key=lambda item: item.name):
+            searchable = "%s %s %s" % (port.name, port.full_name, port.description)
+            if search and search not in searchable.lower():
+                continue
+            self._add_item(self.visible if port.visible else self.available, port)
+
+    def _set_selected(self, source_list, visible: bool) -> None:
+        if not self.node_id:
+            return
+        items = source_list.selectedItems()
+        if not items and source_list.currentItem():
+            items = [source_list.currentItem()]
+        if not items:
+            return
+        for item in items:
+            self.window.project.set_port_visible(
+                self.node_id, item.data(QtCore.Qt.UserRole), visible
+            )
+        self.window.scene.rebuild()
+        self.window.project_modified()
+        self.window.scene.focus_block_signals(self.node_id)
+        self.refresh()
+
+    def add_selected(self, item=None) -> None:
+        if isinstance(item, QtWidgets.QListWidgetItem):
+            item.setSelected(True)
+        self._set_selected(self.available, True)
+
+    def remove_selected(self, item=None) -> None:
+        if isinstance(item, QtWidgets.QListWidgetItem):
+            item.setSelected(True)
+        self._set_selected(self.visible, False)
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, project: WiringProject, comp_path: Path) -> None:
         super().__init__()
@@ -581,12 +721,22 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "available_blocks_dock"):
             self.removeDockWidget(self.available_blocks_dock)
             self.available_blocks_dock.deleteLater()
+        if hasattr(self, "block_signals_dock"):
+            self.removeDockWidget(self.block_signals_dock)
+            self.block_signals_dock.deleteLater()
         self.signal_dock = SignalDock(self)
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.signal_dock)
         self.available_blocks_dock = AvailableBlocksDock(self)
         self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, self.available_blocks_dock)
+        self.block_signals_dock = BlockSignalsDock(self)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.block_signals_dock)
+        self.splitDockWidget(
+            self.signal_dock, self.block_signals_dock, QtCore.Qt.Vertical
+        )
         self.signal_dock.refresh()
         self.available_blocks_dock.refresh()
+        self.block_signals_dock.refresh()
+        self.scene.selectionChanged.connect(self.canvas_selection_changed)
 
     def _create_actions(self) -> None:
         self.new_action = QAction("Import or reload EtherCAT XML…", self)
@@ -635,6 +785,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dirty = True
         self.signal_dock.refresh()
         self.available_blocks_dock.refresh()
+        self.block_signals_dock.refresh()
         if not self.windowTitle().endswith(" *"):
             self.setWindowTitle(self.windowTitle() + " *")
 
@@ -642,6 +793,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dirty = True
         if not self.windowTitle().endswith(" *"):
             self.setWindowTitle(self.windowTitle() + " *")
+
+    def canvas_selection_changed(self) -> None:
+        node_item = next(
+            (item for item in self.scene.selectedItems() if isinstance(item, NodeItem)),
+            None,
+        )
+        if node_item:
+            self.show_block_signals(node_item.node.node_id)
+
+    def show_block_signals(self, node_id: str) -> None:
+        self.block_signals_dock.set_node(node_id)
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:

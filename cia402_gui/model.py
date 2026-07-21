@@ -40,6 +40,7 @@ class Port:
     direction: Direction
     data_type: DataType
     description: str = ""
+    visible: bool = True
 
 
 @dataclass
@@ -88,6 +89,7 @@ class WiringProject:
             for node in self.nodes.values()
             if node.active
             for port in node.ports.values()
+            if port.visible
         }
 
     @property
@@ -193,6 +195,14 @@ class WiringProject:
             raise WiringError("Unknown block: %s" % node_id)
         self.nodes[node_id].active = True
 
+    def set_port_visible(self, node_id: str, port_name: str, visible: bool) -> None:
+        if node_id not in self.nodes:
+            raise WiringError("Unknown block: %s" % node_id)
+        node = self.nodes[node_id]
+        if port_name not in node.ports:
+            raise WiringError("Unknown signal %s on block %s" % (port_name, node_id))
+        node.ports[port_name].visible = visible
+
     def active_signals(self) -> List[Signal]:
         active_ports = self.ports
         result: List[Signal] = []
@@ -266,6 +276,7 @@ class WiringProject:
                             "direction": p.direction.value,
                             "data_type": p.data_type.value,
                             "description": p.description,
+                            "visible": p.visible,
                         }
                         for p in node.ports.values()
                     ],
@@ -311,6 +322,9 @@ class WiringProject:
                     direction=Direction(raw_port["direction"]),
                     data_type=DataType.parse(raw_port["data_type"]),
                     description=raw_port.get("description", ""),
+                    # Projects written before per-block signal selection showed
+                    # every pin, so retain that behavior when the key is absent.
+                    visible=bool(raw_port.get("visible", True)),
                 )
                 node.ports[port.name] = port
             for raw_parameter in raw_node.get("parameters", []):
