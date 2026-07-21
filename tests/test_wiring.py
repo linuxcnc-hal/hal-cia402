@@ -421,8 +421,49 @@ class WiringTests(unittest.TestCase):
         self.assertIn("setp cia402.3.pos-scale", output)
         self.assertIn("=> cia402.3.statusword", output)
 
-    def test_renaming_block_rejects_duplicate_name(self):
-        with self.assertRaisesRegex(WiringError, "already exists"):
+    def test_renaming_block_swaps_existing_block_and_both_wirings(self):
+        second = Node(node_id="lcec.0.1", title="lcec.0.1  (generic)", kind="ethercat")
+        second.ports["statusword"] = Port(
+            name="statusword",
+            full_name="lcec.0.1.statusword",
+            direction=Direction.OUTPUT,
+            data_type=DataType.U32,
+        )
+        monitor = Node(node_id="monitor", title="monitor", kind="test")
+        monitor.ports["statusword"] = Port(
+            name="statusword",
+            full_name="monitor.statusword",
+            direction=Direction.INPUT,
+            data_type=DataType.U32,
+        )
+        self.project.add_node(second)
+        self.project.add_node(monitor)
+        self.project.connect(
+            "lcec.0.0.cia-statusword", "cia402.0.statusword", "first-status"
+        )
+        self.project.connect(
+            "lcec.0.1.statusword", "monitor.statusword", "second-status"
+        )
+
+        original = self.project.nodes["lcec.0.0"]
+        self.project.rename_node("lcec.0.0", "lcec.0.1")
+
+        self.assertIs(self.project.nodes["lcec.0.1"], original)
+        self.assertIs(self.project.nodes["lcec.0.0"], second)
+        self.assertEqual(
+            self.project.signals["first-status"].source,
+            "lcec.0.1.cia-statusword",
+        )
+        self.assertEqual(
+            self.project.signals["second-status"].source,
+            "lcec.0.0.statusword",
+        )
+        output = generate_hal(self.project)
+        self.assertIn("lcec.0.1.cia-statusword", output)
+        self.assertIn("lcec.0.0.statusword", output)
+
+    def test_renaming_block_does_not_swap_different_categories(self):
+        with self.assertRaisesRegex(WiringError, "different category"):
             self.project.rename_node("lcec.0.0", "cia402.0")
 
     def test_renaming_block_rejects_invalid_hal_name(self):

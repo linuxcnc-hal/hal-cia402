@@ -159,7 +159,9 @@ To change a component prefix after moving an EtherCAT slave or LinuxCNC
 instance, right-click its block and choose **Rename block**, or select it and
 press **F2**. Renaming `lcec.0.1` to `lcec.0.2`, for example, updates every pin,
 parameter, and existing wiring endpoint belonging to that block. HAL net names
-remain unchanged. Duplicate and invalid HAL block names are rejected.
+remain unchanged. If `lcec.0.2` already exists, the two blocks automatically
+exchange names and all wiring is updated atomically. Blocks in different
+categories are not swapped, and invalid HAL block names are rejected.
 
 Double-click a block to open its searchable parameter view. Writable values are
 marked `RW` and may be edited; read-only values are marked `RO`. Only writable

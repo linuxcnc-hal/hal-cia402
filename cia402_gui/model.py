@@ -116,7 +116,7 @@ class WiringProject:
         self.nodes[node.node_id] = node
 
     def rename_node(self, old_id: str, new_id: str) -> Node:
-        """Rename a HAL block prefix and every endpoint that belongs to it."""
+        """Rename a HAL block prefix, swapping a same-kind occupant if needed."""
 
         if old_id not in self.nodes:
             raise WiringError("Unknown block: %s" % old_id)
@@ -125,19 +125,29 @@ class WiringProject:
             raise WiringError("Invalid HAL block name: %s" % new_id)
         if new_id == old_id:
             return self.nodes[old_id]
-        if new_id in self.nodes:
-            raise WiringError("Block name already exists: %s" % new_id)
-
         node = self.nodes[old_id]
+        occupant = self.nodes.get(new_id)
+        if occupant is not None and occupant.kind != node.kind:
+            raise WiringError(
+                "Block %s belongs to a different category and cannot be swapped"
+                % new_id
+            )
+
+        renamed_ids = {old_id: new_id}
+        if occupant is not None:
+            renamed_ids[new_id] = old_id
+        affected_ids = set(renamed_ids)
+
         endpoint_names = {
             port.full_name
             for other_id, other in self.nodes.items()
-            if other_id != old_id
+            if other_id not in affected_ids
             for port in other.ports.values()
         }
         renamed_ports = {
-            port.full_name: "%s.%s" % (new_id, port.name)
-            for port in node.ports.values()
+            port.full_name: "%s.%s" % (renamed_ids[node_id], port.name)
+            for node_id in affected_ids
+            for port in self.nodes[node_id].ports.values()
         }
         collisions = endpoint_names.intersection(renamed_ports.values())
         if collisions:
@@ -152,20 +162,21 @@ class WiringProject:
                 renamed_ports.get(destination, destination)
                 for destination in signal.destinations
             ]
-        for port in node.ports.values():
-            port.full_name = "%s.%s" % (new_id, port.name)
-        for parameter in node.parameters.values():
-            parameter.full_name = "%s.%s" % (new_id, parameter.name)
-
-        if node.title.startswith(old_id):
-            node.title = new_id + node.title[len(old_id) :]
-        else:
-            node.title = new_id
-        node.node_id = new_id
+        for source_id, target_id in renamed_ids.items():
+            renamed_node = self.nodes[source_id]
+            for port in renamed_node.ports.values():
+                port.full_name = "%s.%s" % (target_id, port.name)
+            for parameter in renamed_node.parameters.values():
+                parameter.full_name = "%s.%s" % (target_id, parameter.name)
+            if renamed_node.title.startswith(source_id):
+                renamed_node.title = target_id + renamed_node.title[len(source_id) :]
+            else:
+                renamed_node.title = target_id
+            renamed_node.node_id = target_id
 
         # Preserve the block's relative order in the library and project file.
         self.nodes = {
-            (new_id if node_id == old_id else node_id): value
+            renamed_ids.get(node_id, node_id): value
             for node_id, value in self.nodes.items()
         }
         return node
