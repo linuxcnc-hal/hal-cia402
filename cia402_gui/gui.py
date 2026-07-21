@@ -23,7 +23,13 @@ from .parsers import create_joint_nodes, parse_comp, parse_ethercat_xml
 from .project_io import load_project, save_project
 
 
-QAction = getattr(QtWidgets, "QAction", QtGui.QAction)
+# PyQt5 exposes QAction from QtWidgets, while PySide6 exposes it from QtGui.
+# Avoid getattr(..., QtGui.QAction): Python evaluates that default eagerly,
+# which raises on PyQt5 even though QtWidgets.QAction exists.
+if hasattr(QtWidgets, "QAction"):
+    QAction = QtWidgets.QAction
+else:
+    QAction = QtGui.QAction
 
 TYPE_COLORS = {
     DataType.BIT: QtGui.QColor("#e3b341"),
