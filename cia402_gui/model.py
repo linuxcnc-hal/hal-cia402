@@ -73,6 +73,7 @@ class Signal:
     name: str
     source: str
     destinations: List[str] = field(default_factory=list)
+    routed: bool = False
 
 
 class WiringError(ValueError):
@@ -156,6 +157,69 @@ class WiringProject:
         self.signals[name] = signal
         return signal
 
+    def create_goto(self, source_name: str, signal_name: str) -> Signal:
+        ports = self.ports
+        source = ports.get(source_name)
+        if source is None:
+            raise WiringError("Goto source must be a visible port on the canvas")
+        if source.direction == Direction.INPUT:
+            raise WiringError("A Goto signal must start at an output or bidirectional pin")
+        existing = self._signal_for_port(source_name)
+        if existing:
+            if existing.source != source_name:
+                raise WiringError("This pin is already a signal destination")
+            existing.routed = True
+            return existing
+        self.validate_signal_name(signal_name)
+        if signal_name in self.signals:
+            raise WiringError("Signal name already exists: %s" % signal_name)
+        signal = Signal(
+            name=signal_name,
+            source=source_name,
+            destinations=[],
+            routed=True,
+        )
+        self.signals[signal.name] = signal
+        return signal
+
+    def connect_from(self, signal_name: str, destination_name: str) -> Signal:
+        if signal_name not in self.signals:
+            raise WiringError("Unknown Goto signal: %s" % signal_name)
+        signal = self.signals[signal_name]
+        ports = self.ports
+        source = ports.get(signal.source)
+        destination = ports.get(destination_name)
+        if source is None:
+            raise WiringError("The Goto source is not currently available")
+        if destination is None:
+            raise WiringError("From destination must be a visible port on the canvas")
+        if destination.direction == Direction.OUTPUT:
+            raise WiringError("A From tag must connect to an input or bidirectional pin")
+        if source.data_type != destination.data_type:
+            raise WiringError(
+                "Type mismatch: Goto %s is %s, but %s is %s"
+                % (
+                    signal.name,
+                    source.data_type.value,
+                    destination.full_name,
+                    destination.data_type.value,
+                )
+            )
+        existing = self._signal_for_port(destination_name)
+        if existing:
+            raise WiringError(
+                "%s is already connected to signal %s"
+                % (destination_name, existing.name)
+            )
+        signal.destinations.append(destination_name)
+        signal.routed = True
+        return signal
+
+    def set_signal_routed(self, signal_name: str, routed: bool) -> None:
+        if signal_name not in self.signals:
+            raise WiringError("Unknown signal: %s" % signal_name)
+        self.signals[signal_name].routed = routed
+
     @staticmethod
     def _orient(a: Port, b: Port) -> Tuple[Port, Port]:
         if a.direction == Direction.OUTPUT and b.direction != Direction.OUTPUT:
@@ -225,6 +289,7 @@ class WiringProject:
                         name=signal.name,
                         source=signal.source,
                         destinations=destinations,
+                        routed=signal.routed,
                     )
                 )
         return result
@@ -304,6 +369,7 @@ class WiringProject:
                     "name": signal.name,
                     "source": signal.source,
                     "destinations": signal.destinations,
+                    "routed": signal.routed,
                 }
                 for signal in self.signals.values()
             ],
@@ -349,6 +415,7 @@ class WiringProject:
                 name=raw_signal["name"],
                 source=raw_signal["source"],
                 destinations=list(raw_signal.get("destinations", [])),
+                routed=bool(raw_signal.get("routed", False)),
             )
             project.signals[signal.name] = signal
         return project

@@ -182,9 +182,28 @@ class PortItem(QtWidgets.QGraphicsEllipseItem):
 
     def contextMenuEvent(self, event) -> None:
         menu = QtWidgets.QMenu()
+        existing = self.scene().project._signal_for_port(self.port.full_name)
+        create_goto_action = None
+        connect_from_action = None
+        route_existing_action = None
+        if self.port.direction in (Direction.OUTPUT, Direction.IO):
+            if existing is None:
+                create_goto_action = menu.addAction("Create Goto signal...")
+            elif existing.source == self.port.full_name and not existing.routed:
+                route_existing_action = menu.addAction("Display as Goto/From")
+        if self.port.direction in (Direction.INPUT, Direction.IO) and existing is None:
+            connect_from_action = menu.addAction("Connect from Goto...")
+        if menu.actions():
+            menu.addSeparator()
         remove_action = menu.addAction("Remove signal from block")
         selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
-        if selected == remove_action:
+        if selected == create_goto_action:
+            self.scene().create_goto(self.port.full_name)
+        elif selected == connect_from_action:
+            self.scene().connect_from_goto(self.port.full_name)
+        elif selected == route_existing_action and existing:
+            self.scene().set_signal_routed(existing.name, True)
+        elif selected == remove_action:
             self.scene().set_port_visible(
                 self.node_item.node.node_id, self.port.name, False
             )
@@ -296,6 +315,88 @@ class WireItem(QtWidgets.QGraphicsPathItem):
         )
         self.setPath(path)
 
+    def contextMenuEvent(self, event) -> None:
+        menu = QtWidgets.QMenu()
+        route_action = menu.addAction("Display as Goto/From")
+        selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
+        if selected == route_action:
+            self.scene().set_signal_routed(self.signal_name, True)
+        event.accept()
+
+
+class RouteTagItem(QtWidgets.QGraphicsRectItem):
+    HEIGHT = 30.0
+
+    def __init__(self, signal_name: str, kind: str, endpoint: PortItem) -> None:
+        self.signal_name = signal_name
+        self.kind = kind
+        self.endpoint = endpoint
+        width = max(110.0, min(230.0, 54.0 + len(signal_name) * 7.0))
+        super().__init__(0.0, 0.0, width, self.HEIGHT)
+        self.setBrush(QtGui.QBrush(QtGui.QColor("#21262d")))
+        color = TYPE_COLORS[endpoint.port.data_type]
+        self.setPen(QtGui.QPen(color, 2.0))
+        self.setZValue(2)
+        label = QtWidgets.QGraphicsSimpleTextItem(
+            "%s  %s" % ("Goto" if kind == "goto" else "From", signal_name), self
+        )
+        label.setBrush(QtGui.QBrush(color))
+        label.setPos(9.0, 7.0)
+        self.setToolTip(
+            "%s tag for HAL signal %s\nRight-click to restore direct wiring."
+            % (kind.title(), signal_name)
+        )
+        self.update_position()
+
+    def update_position(self) -> None:
+        endpoint = self.endpoint.center()
+        if self.kind == "goto":
+            self.setPos(endpoint.x() + 55.0, endpoint.y() - self.HEIGHT / 2.0)
+        else:
+            self.setPos(
+                endpoint.x() - self.rect().width() - 55.0,
+                endpoint.y() - self.HEIGHT / 2.0,
+            )
+
+    def connection_point(self) -> QtCore.QPointF:
+        rect = self.sceneBoundingRect()
+        if self.kind == "goto":
+            return QtCore.QPointF(rect.left(), rect.center().y())
+        return QtCore.QPointF(rect.right(), rect.center().y())
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QtWidgets.QMenu()
+        signal = self.scene().project.signals.get(self.signal_name)
+        direct_action = None
+        if signal and signal.destinations:
+            direct_action = menu.addAction("Display as direct wire")
+        delete_action = menu.addAction("Delete HAL signal")
+        selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
+        if direct_action is not None and selected == direct_action:
+            self.scene().set_signal_routed(self.signal_name, False)
+        elif selected == delete_action:
+            self.scene().project.remove_signal(self.signal_name)
+            self.scene().rebuild_wires()
+            self.scene().project_changed.emit()
+        event.accept()
+
+
+class RouteStubItem(QtWidgets.QGraphicsPathItem):
+    def __init__(self, tag: RouteTagItem) -> None:
+        super().__init__()
+        self.tag = tag
+        self.setPen(QtGui.QPen(TYPE_COLORS[tag.endpoint.port.data_type], 2.5))
+        self.setZValue(0)
+        self.update_path()
+
+    def update_path(self) -> None:
+        self.tag.update_position()
+        endpoint = self.tag.endpoint.center()
+        tag_point = self.tag.connection_point()
+        path = QtGui.QPainterPath(endpoint if self.tag.kind == "goto" else tag_point)
+        path.lineTo(tag_point if self.tag.kind == "goto" else endpoint)
+        self.setPath(path)
+
 
 class WiringScene(QtWidgets.QGraphicsScene):
     project_changed = QtCore.pyqtSignal() if QT_BINDING == "PyQt5" else QtCore.Signal()
@@ -307,6 +408,8 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.node_items: Dict[str, NodeItem] = {}
         self.port_items: Dict[str, PortItem] = {}
         self.wire_items = []
+        self.route_tags = []
+        self.route_stubs = []
         self.connection_start: Optional[PortItem] = None
         self.preview_wire: Optional[QtWidgets.QGraphicsPathItem] = None
         self.rebuild()
@@ -316,6 +419,8 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.node_items.clear()
         self.port_items.clear()
         self.wire_items.clear()
+        self.route_tags.clear()
+        self.route_stubs.clear()
         for node in self.project.nodes.values():
             if not node.active:
                 continue
@@ -327,12 +432,32 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.setSceneRect(self.itemsBoundingRect().adjusted(-120, -120, 120, 120))
 
     def rebuild_wires(self) -> None:
-        for wire in self.wire_items:
-            self.removeItem(wire)
+        for item in self.wire_items + self.route_tags + self.route_stubs:
+            self.removeItem(item)
         self.wire_items = []
-        for signal in self.project.active_signals():
+        self.route_tags = []
+        self.route_stubs = []
+        for signal in self.project.signals.values():
             source = self.port_items.get(signal.source)
             if source is None:
+                continue
+            if signal.routed:
+                goto_tag = RouteTagItem(signal.name, "goto", source)
+                goto_stub = RouteStubItem(goto_tag)
+                self.addItem(goto_stub)
+                self.addItem(goto_tag)
+                self.route_tags.append(goto_tag)
+                self.route_stubs.append(goto_stub)
+                for destination_name in signal.destinations:
+                    destination = self.port_items.get(destination_name)
+                    if destination is None:
+                        continue
+                    from_tag = RouteTagItem(signal.name, "from", destination)
+                    from_stub = RouteStubItem(from_tag)
+                    self.addItem(from_stub)
+                    self.addItem(from_tag)
+                    self.route_tags.append(from_tag)
+                    self.route_stubs.append(from_stub)
                 continue
             for destination_name in signal.destinations:
                 destination = self.port_items.get(destination_name)
@@ -345,6 +470,8 @@ class WiringScene(QtWidgets.QGraphicsScene):
     def update_wires(self) -> None:
         for wire in self.wire_items:
             wire.update_path()
+        for stub in self.route_stubs:
+            stub.update_path()
 
     def begin_connection(self, port_item: PortItem) -> None:
         self.connection_start = port_item
@@ -484,6 +611,75 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.project_changed.emit()
         self.focus_block_signals(node_id)
 
+    def create_goto(self, source_name: str) -> None:
+        source = self.project.ports.get(source_name)
+        if source is None:
+            return
+        default = self.project.suggest_signal_name(source)
+        signal_name, accepted = QtWidgets.QInputDialog.getText(
+            self.views()[0], "Create Goto signal", "HAL signal name:", text=default
+        )
+        if not accepted:
+            return
+        try:
+            self.project.create_goto(source_name, str(signal_name).strip())
+        except WiringError as exc:
+            QtWidgets.QMessageBox.warning(self.views()[0], "Cannot create Goto", str(exc))
+            return
+        self.rebuild_wires()
+        self.project_changed.emit()
+
+    def connect_from_goto(self, destination_name: str) -> None:
+        destination = self.project.ports.get(destination_name)
+        if destination is None:
+            return
+        candidates = []
+        for signal in self.project.signals.values():
+            source = self.project.ports.get(signal.source)
+            if (
+                signal.routed
+                and source is not None
+                and source.data_type == destination.data_type
+                and destination_name not in signal.destinations
+            ):
+                candidates.append(signal)
+        if not candidates:
+            QtWidgets.QMessageBox.information(
+                self.views()[0],
+                "No compatible Goto",
+                "No visible Goto signal with type %s is available."
+                % destination.data_type.value,
+            )
+            return
+        labels = ["%s    (%s)" % (signal.name, signal.source) for signal in candidates]
+        selected, accepted = QtWidgets.QInputDialog.getItem(
+            self.views()[0],
+            "Connect from Goto",
+            "Goto signal:",
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        signal = candidates[labels.index(str(selected))]
+        try:
+            self.project.connect_from(signal.name, destination_name)
+        except WiringError as exc:
+            QtWidgets.QMessageBox.warning(self.views()[0], "Cannot connect From", str(exc))
+            return
+        self.rebuild_wires()
+        self.project_changed.emit()
+
+    def set_signal_routed(self, signal_name: str, routed: bool) -> None:
+        try:
+            self.project.set_signal_routed(signal_name, routed)
+        except WiringError as exc:
+            QtWidgets.QMessageBox.warning(self.views()[0], "Cannot change routing", str(exc))
+            return
+        self.rebuild_wires()
+        self.project_changed.emit()
+
     def focus_block_signals(self, node_id: str) -> None:
         node_item = self.node_items.get(node_id)
         if node_item:
@@ -554,12 +750,16 @@ class SignalDock(QtWidgets.QDockWidget):
         active = {signal.name: signal for signal in self.window.project.active_signals()}
         for signal in self.window.project.signals.values():
             active_signal = active.get(signal.name)
-            if active_signal is None:
+            if signal.routed and not signal.destinations:
+                state = "  [Goto: waiting for From]"
+            elif active_signal is None:
                 state = "  [suspended]"
             elif len(active_signal.destinations) != len(signal.destinations):
                 state = "  [partly suspended]"
             else:
                 state = ""
+            if signal.routed and signal.destinations:
+                state += "  [Goto/From]"
             text = "%s\n  %s  ->  %s" % (
                 signal.name + state,
                 signal.source,

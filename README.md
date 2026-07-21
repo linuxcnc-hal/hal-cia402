@@ -49,6 +49,21 @@ Double-click an available block to add it to the canvas. The library continues
 to show added blocks with an **on canvas** status; double-clicking one focuses
 it. Importing XML adds blocks to the library without placing them automatically.
 
+### Goto/From signal routing
+
+Long connections can be displayed using Simulink-style Goto/From tags:
+
+1. Right-click an output pin and choose **Create Goto signal**.
+2. Enter the HAL signal name.
+3. Right-click a compatible input pin and choose **Connect from Goto**.
+4. Select the named signal.
+
+The canvas displays a short wire to `Goto <signal>` at the writer and a short
+wire from `From <signal>` at every reader. HAL export still emits one ordinary
+`net` command containing the real source and destinations. Right-click a direct
+wire to convert it to Goto/From display, or right-click a tag to return to a
+direct wire. Goto/From display mode is saved with the project.
+
 An XML file can still be opened directly from the command line:
 
 ```bash

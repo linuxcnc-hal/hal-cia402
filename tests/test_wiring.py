@@ -204,6 +204,34 @@ class WiringTests(unittest.TestCase):
         self.assertEqual(signal.source, "joint.0.motor-pos-cmd")
         self.assertEqual(signal.destinations, ["cia402.0.pos-cmd"])
 
+    def test_goto_from_routing_generates_normal_hal_net(self):
+        signal = self.project.create_goto(
+            "joint.0.motor-pos-cmd", "x-pos-command"
+        )
+        self.assertTrue(signal.routed)
+        self.assertNotIn("net x-pos-command", generate_hal(self.project))
+
+        self.project.connect_from("x-pos-command", "cia402.0.pos-cmd")
+        output = generate_hal(self.project)
+
+        self.assertIn("net x-pos-command", output)
+        self.assertIn("joint.0.motor-pos-cmd", output)
+        self.assertIn("=> cia402.0.pos-cmd", output)
+
+    def test_goto_from_type_mismatch_is_rejected(self):
+        self.project.create_goto("joint.0.amp-enable-out", "x-enable")
+
+        with self.assertRaisesRegex(WiringError, "Type mismatch"):
+            self.project.connect_from("x-enable", "cia402.0.pos-cmd")
+
+    def test_goto_from_display_mode_survives_project_round_trip(self):
+        self.project.create_goto("joint.0.motor-pos-cmd", "x-pos-command")
+        self.project.connect_from("x-pos-command", "cia402.0.pos-cmd")
+
+        restored = WiringProject.from_dict(self.project.to_dict())
+
+        self.assertTrue(restored.signals["x-pos-command"].routed)
+
     def test_output_to_output_is_rejected(self):
         with self.assertRaisesRegex(WiringError, "two output"):
             self.project.connect(
