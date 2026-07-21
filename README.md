@@ -37,6 +37,18 @@ to select `ethercat-conf.xml`; no joint or component counts are required.
 Discovery uses the LinuxCNC Python HAL API and falls back to `halcmd` on older
 installations. Press **F5** to refresh the live HAL blocks.
 
+The canvas starts empty. Every discovered block is placed in the categorized
+**Block library** instead:
+
+* **LinuxCNC joints** — motion commands, amplifier control, and feedback.
+* **CiA 402 drive interface** — drive state control, scaling, modes, and homing.
+* **EtherCAT / LCEC** — PDO communication with the physical slave.
+
+This presents the intended path as `LinuxCNC joint -> CiA 402 -> EtherCAT/LCEC`.
+Double-click an available block to add it to the canvas. The library continues
+to show added blocks with an **on canvas** status; double-clicking one focuses
+it. Importing XML adds blocks to the library without placing them automatically.
+
 An XML file can still be opened directly from the command line:
 
 ```bash

@@ -66,6 +66,11 @@ def _hide_all_ports(nodes) -> None:
             port.visible = False
 
 
+def _put_all_blocks_in_library(nodes) -> None:
+    for node in nodes:
+        node.active = False
+
+
 def build_runtime_project(comp_path: Path) -> WiringProject:
     """Create the initial canvas from a running LinuxCNC HAL."""
 
@@ -74,6 +79,7 @@ def build_runtime_project(comp_path: Path) -> WiringProject:
     live_nodes, live_parameters = discover_live_hal()
     attach_component_parameters(live_nodes, comp_path, live_parameters)
     _hide_all_ports(live_nodes)
+    _put_all_blocks_in_library(live_nodes)
     vertical_spacing = 140.0
     _layout_and_add(
         project, [node for node in live_nodes if node.kind == "joint"], 0.0, vertical_spacing
@@ -112,6 +118,7 @@ def build_project(
     all_nodes = joints + components + ethercat_nodes
     attach_component_parameters(all_nodes, comp_path, live_parameters)
     _hide_all_ports(all_nodes)
+    _put_all_blocks_in_library(all_nodes)
     vertical_spacing = 140.0
     _layout_and_add(project, joints, 0.0, vertical_spacing)
     _layout_and_add(project, components, 380.0, vertical_spacing)
@@ -590,39 +597,119 @@ class SignalDock(QtWidgets.QDockWidget):
 
 
 class AvailableBlocksDock(QtWidgets.QDockWidget):
+    CATEGORIES = (
+        (
+            "joint",
+            "LinuxCNC joints",
+            "Motion commands, amplifier control, and position feedback.",
+        ),
+        (
+            "cia402",
+            "CiA 402 drive interface",
+            "Drive state machine, operating mode, scaling, and homing.",
+        ),
+        (
+            "ethercat",
+            "EtherCAT / LCEC",
+            "PDO signals exchanged with the physical EtherCAT slave.",
+        ),
+    )
+
     def __init__(self, window: "MainWindow") -> None:
-        super().__init__("Available blocks", window)
+        super().__init__("Block library", window)
         self.window = window
         container = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(container)
         explanation = QtWidgets.QLabel(
-            "Removed blocks remain available here.\nDouble-click a block to restore it."
+            "Build the control path step by step:\n"
+            "LinuxCNC joint  ->  CiA 402  ->  EtherCAT/LCEC\n\n"
+            "Double-click an available block to add it."
         )
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
-        self.list = QtWidgets.QListWidget()
+        self.filter = QtWidgets.QLineEdit()
+        self.filter.setPlaceholderText("Search blocks...")
+        self.filter.textChanged.connect(self.refresh)
+        layout.addWidget(self.filter)
+        self.list = QtWidgets.QTreeWidget()
+        self.list.setHeaderHidden(True)
+        self.list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.list.itemDoubleClicked.connect(self.restore_selected)
         layout.addWidget(self.list)
-        add_button = QtWidgets.QPushButton("Add block")
+        add_button = QtWidgets.QPushButton("Add selected block")
         add_button.clicked.connect(self.restore_selected)
         layout.addWidget(add_button)
         self.setWidget(container)
 
     def refresh(self) -> None:
         self.list.clear()
-        for node in self.window.project.nodes.values():
-            if node.active:
+        search = self.filter.text().strip().lower()
+        categorized_ids = set()
+        for kind, label, description in self.CATEGORIES:
+            nodes = [
+                node
+                for node in self.window.project.nodes.values()
+                if node.kind == kind
+                and (
+                    not search
+                    or search in (node.node_id + " " + node.title + " " + description).lower()
+                )
+            ]
+            if not nodes:
                 continue
-            item = QtWidgets.QListWidgetItem("%s    [%s]" % (node.node_id, node.kind))
-            item.setData(QtCore.Qt.UserRole, node.node_id)
-            self.list.addItem(item)
+            categorized_ids.update(node.node_id for node in nodes)
+            group = QtWidgets.QTreeWidgetItem(["%s (%d)" % (label, len(nodes))])
+            group.setFlags(group.flags() & ~QtCore.Qt.ItemIsSelectable)
+            group.setToolTip(0, description)
+            font = group.font(0)
+            font.setBold(True)
+            group.setFont(0, font)
+            group.setForeground(0, QtGui.QBrush(NODE_COLORS.get(kind, QtGui.QColor("#c9d1d9"))))
+            self.list.addTopLevelItem(group)
+            for node in sorted(nodes, key=lambda item: item.node_id):
+                state = "on canvas" if node.active else "available"
+                item = QtWidgets.QTreeWidgetItem(group, ["%s    [%s]" % (node.node_id, state)])
+                item.setData(0, QtCore.Qt.UserRole, node.node_id)
+                item.setToolTip(0, "%s\n%s" % (node.title, description))
+                if node.active:
+                    item.setForeground(0, QtGui.QBrush(QtGui.QColor("#8b949e")))
 
-    def restore_selected(self, item=None) -> None:
-        if not isinstance(item, QtWidgets.QListWidgetItem):
-            item = self.list.currentItem()
-        if not item:
+        other_nodes = [
+            node
+            for node in self.window.project.nodes.values()
+            if node.node_id not in categorized_ids
+            and (not search or search in (node.node_id + " " + node.title).lower())
+        ]
+        if other_nodes:
+            group = QtWidgets.QTreeWidgetItem(["Other blocks (%d)" % len(other_nodes)])
+            group.setFlags(group.flags() & ~QtCore.Qt.ItemIsSelectable)
+            self.list.addTopLevelItem(group)
+            for node in sorted(other_nodes, key=lambda item: item.node_id):
+                state = "on canvas" if node.active else "available"
+                item = QtWidgets.QTreeWidgetItem(group, ["%s    [%s]" % (node.node_id, state)])
+                item.setData(0, QtCore.Qt.UserRole, node.node_id)
+        self.list.expandAll()
+
+    def restore_selected(self, item=None, column=0) -> None:
+        if isinstance(item, QtWidgets.QTreeWidgetItem) and item.data(0, QtCore.Qt.UserRole):
+            item.setSelected(True)
+        items = self.list.selectedItems()
+        if not items and self.list.currentItem():
+            items = [self.list.currentItem()]
+        node_ids = [item.data(0, QtCore.Qt.UserRole) for item in items]
+        node_ids = [node_id for node_id in node_ids if node_id]
+        if not node_ids:
             return
-        self.window.scene.restore_node(item.data(QtCore.Qt.UserRole))
+        changed = False
+        for node_id in node_ids:
+            node = self.window.project.nodes[node_id]
+            if not node.active:
+                self.window.project.activate_node(node_id)
+                changed = True
+        if changed:
+            self.window.scene.rebuild()
+            self.window.project_modified()
+        self.window.scene.focus_block_signals(node_ids[-1])
 
 
 class BlockSignalsDock(QtWidgets.QDockWidget):
