@@ -163,6 +163,11 @@ remain unchanged. If `lcec.0.2` already exists, the two blocks automatically
 exchange names and all wiring is updated atomically. Blocks in different
 categories are not swapped, and invalid HAL block names are rejected.
 
+When a layout is arranged, right-click a block and choose **Lock block
+position** to prevent accidental movement. Locked blocks remain selectable and
+their pins remain fully usable for wiring. Right-click again and choose
+**Unlock block position** to move the block. Lock states are saved in projects.
+
 Double-click a block to open its searchable parameter view. Writable values are
 marked `RW` and may be edited; read-only values are marked `RO`. Only writable
 parameters are emitted as `setp` commands during export.

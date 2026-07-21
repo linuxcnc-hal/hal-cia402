@@ -136,6 +136,7 @@ def merge_project(target: WiringProject, incoming: WiringProject) -> None:
             continue
         new_node.active = old_node.active
         new_node.position = old_node.position
+        new_node.locked = old_node.locked
         for name, port in new_node.ports.items():
             if name in old_node.ports:
                 port.visible = old_node.ports[name].visible
@@ -237,6 +238,12 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
         title = QtWidgets.QGraphicsSimpleTextItem(node.title, self)
         title.setBrush(QtGui.QBrush(QtGui.QColor("white")))
         title.setPos(10, 6)
+        if node.locked:
+            lock_label = QtWidgets.QGraphicsSimpleTextItem("LOCKED", self)
+            lock_label.setBrush(QtGui.QBrush(QtGui.QColor("white")))
+            lock_label.setPos(
+                self.WIDTH - lock_label.boundingRect().width() - 10.0, 6.0
+            )
 
         if not visible_ports:
             empty_label = QtWidgets.QGraphicsSimpleTextItem("No signals selected", self)
@@ -263,6 +270,15 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
         self.setPos(*node.position)
 
     def itemChange(self, change, value):
+        if (
+            change == QtWidgets.QGraphicsItem.ItemPositionChange
+            and self.node.locked
+            and self.scene() is not None
+        ):
+            # Qt may move every selected item when one movable item is dragged.
+            # Reject the proposed position so locked blocks also stay fixed
+            # during rubber-band and multi-selection moves.
+            return self.pos()
         if change == QtWidgets.QGraphicsItem.ItemPositionHasChanged:
             self.node.position = (float(value.x()), float(value.y()))
             self.editor.update_wires()
@@ -281,6 +297,9 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
         menu = QtWidgets.QMenu()
         signals_action = menu.addAction("Manage block signals…")
         rename_action = menu.addAction("Rename block…")
+        lock_action = menu.addAction(
+            "Unlock block position" if self.node.locked else "Lock block position"
+        )
         menu.addSeparator()
         remove_action = menu.addAction("Remove block")
         selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
@@ -288,6 +307,8 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
             self.editor.focus_block_signals(self.node.node_id)
         elif selected == rename_action:
             self.editor.rename_node(self.node.node_id)
+        elif selected == lock_action:
+            self.editor.set_node_locked(self.node.node_id, not self.node.locked)
         elif selected == remove_action:
             self.editor.remove_node(self.node.node_id)
         event.accept()
@@ -434,11 +455,13 @@ class NoteItem(QtWidgets.QGraphicsRectItem):
         self.setRect(0.0, 0.0, self.WIDTH, height)
         self.setBrush(QtGui.QBrush(QtGui.QColor("#fff8c5")))
         self.setPen(QtGui.QPen(QtGui.QColor("#d4a72c"), 1.2))
-        self.setFlags(
-            QtWidgets.QGraphicsItem.ItemIsMovable
-            | QtWidgets.QGraphicsItem.ItemIsSelectable
+        flags = (
+            QtWidgets.QGraphicsItem.ItemIsSelectable
             | QtWidgets.QGraphicsItem.ItemSendsGeometryChanges
         )
+        if not node.locked:
+            flags |= QtWidgets.QGraphicsItem.ItemIsMovable
+        self.setFlags(flags)
         self.setZValue(2)
         self.setToolTip("Visual note only; it is not included in HAL export")
         self.setPos(*note.position)
@@ -708,6 +731,18 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.project.activate_node(node_id)
         self.rebuild()
         self.project_changed.emit()
+
+    def set_node_locked(self, node_id: str, locked: bool) -> None:
+        try:
+            self.project.set_node_locked(node_id, locked)
+        except WiringError as exc:
+            QtWidgets.QMessageBox.warning(
+                self.views()[0], "Cannot change block lock", str(exc)
+            )
+            return
+        self.rebuild()
+        self.project_changed.emit()
+        self.focus_block_signals(node_id)
 
     def set_port_visible(self, node_id: str, port_name: str, visible: bool) -> None:
         self.project.set_port_visible(node_id, port_name, visible)

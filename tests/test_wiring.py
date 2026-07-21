@@ -382,6 +382,15 @@ class WiringTests(unittest.TestCase):
         self.assertNotIn("lcec.0.0.cia-statusword", restored.ports)
         self.assertIn("lcec.0.0.cia-statusword", restored.all_ports)
 
+    def test_locked_block_state_is_saved_in_project(self):
+        self.project.set_node_locked("lcec.0.0", True)
+
+        restored = WiringProject.from_dict(self.project.to_dict())
+
+        self.assertTrue(restored.nodes["lcec.0.0"].locked)
+        self.assertFalse(restored.nodes["cia402.0"].locked)
+        self.assertEqual(generate_hal(restored), generate_hal(self.project))
+
     def test_hiding_and_showing_port_suspends_and_restores_signal(self):
         self.project.connect(
             "joint.0.motor-pos-cmd", "cia402.0.pos-cmd", "x-pos-cmd"

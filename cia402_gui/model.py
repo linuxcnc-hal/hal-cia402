@@ -66,6 +66,7 @@ class Node:
     parameters: Dict[str, Parameter] = field(default_factory=dict)
     position: Tuple[float, float] = (0.0, 0.0)
     active: bool = True
+    locked: bool = False
 
 
 @dataclass
@@ -369,6 +370,11 @@ class WiringProject:
             raise WiringError("Unknown block: %s" % node_id)
         self.nodes[node_id].active = True
 
+    def set_node_locked(self, node_id: str, locked: bool) -> None:
+        if node_id not in self.nodes:
+            raise WiringError("Unknown block: %s" % node_id)
+        self.nodes[node_id].locked = bool(locked)
+
     def set_port_visible(self, node_id: str, port_name: str, visible: bool) -> None:
         if node_id not in self.nodes:
             raise WiringError("Unknown block: %s" % node_id)
@@ -444,6 +450,7 @@ class WiringProject:
                     "kind": node.kind,
                     "position": list(node.position),
                     "active": node.active,
+                    "locked": node.locked,
                     "ports": [
                         {
                             "name": p.name,
@@ -499,6 +506,7 @@ class WiringProject:
                 kind=raw_node["kind"],
                 position=tuple(raw_node.get("position", (0.0, 0.0))),
                 active=bool(raw_node.get("active", True)),
+                locked=bool(raw_node.get("locked", False)),
             )
             for raw_port in raw_node.get("ports", []):
                 port = Port(
