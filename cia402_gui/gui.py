@@ -280,11 +280,14 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
     def contextMenuEvent(self, event) -> None:
         menu = QtWidgets.QMenu()
         signals_action = menu.addAction("Manage block signals…")
+        rename_action = menu.addAction("Rename block…")
         menu.addSeparator()
         remove_action = menu.addAction("Remove block")
         selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
         if selected == signals_action:
             self.editor.focus_block_signals(self.node.node_id)
+        elif selected == rename_action:
+            self.editor.rename_node(self.node.node_id)
         elif selected == remove_action:
             self.editor.remove_node(self.node.node_id)
         event.accept()
@@ -617,6 +620,30 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.rebuild()
         self.project_changed.emit()
 
+    def rename_node(self, node_id: str) -> None:
+        node = self.project.nodes.get(node_id)
+        if node is None:
+            return
+        new_id, accepted = QtWidgets.QInputDialog.getText(
+            self.views()[0],
+            "Rename HAL block",
+            "New HAL block name:\n\nAll pins, parameters, and existing wiring "
+            "endpoints will use this prefix.",
+            text=node_id,
+        )
+        if not accepted:
+            return
+        try:
+            renamed = self.project.rename_node(node_id, str(new_id))
+        except WiringError as exc:
+            QtWidgets.QMessageBox.warning(
+                self.views()[0], "Cannot rename block", str(exc)
+            )
+            return
+        self.rebuild()
+        self.project_changed.emit()
+        self.focus_block_signals(renamed.node_id)
+
     def restore_node(self, node_id: str) -> None:
         self.project.activate_node(node_id)
         self.rebuild()
@@ -772,6 +799,20 @@ class WiringView(QtWidgets.QGraphicsView):
         if event.key() == QtCore.Qt.Key_Delete:
             self.scene().delete_selected_items()
             event.accept()
+        elif event.key() == QtCore.Qt.Key_F2:
+            node_item = next(
+                (
+                    item
+                    for item in self.scene().selectedItems()
+                    if isinstance(item, NodeItem)
+                ),
+                None,
+            )
+            if node_item:
+                self.scene().rename_node(node_item.node.node_id)
+                event.accept()
+            else:
+                super().keyPressEvent(event)
         else:
             super().keyPressEvent(event)
 

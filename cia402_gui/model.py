@@ -82,6 +82,7 @@ class WiringError(ValueError):
 
 class WiringProject:
     SIGNAL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+    BLOCK_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$")
 
     def __init__(self) -> None:
         self.nodes: Dict[str, Node] = {}
@@ -113,6 +114,61 @@ class WiringProject:
         if duplicate_ports:
             raise WiringError("Duplicate ports: %s" % ", ".join(sorted(duplicate_ports)))
         self.nodes[node.node_id] = node
+
+    def rename_node(self, old_id: str, new_id: str) -> Node:
+        """Rename a HAL block prefix and every endpoint that belongs to it."""
+
+        if old_id not in self.nodes:
+            raise WiringError("Unknown block: %s" % old_id)
+        new_id = new_id.strip()
+        if not self.BLOCK_NAME.match(new_id):
+            raise WiringError("Invalid HAL block name: %s" % new_id)
+        if new_id == old_id:
+            return self.nodes[old_id]
+        if new_id in self.nodes:
+            raise WiringError("Block name already exists: %s" % new_id)
+
+        node = self.nodes[old_id]
+        endpoint_names = {
+            port.full_name
+            for other_id, other in self.nodes.items()
+            if other_id != old_id
+            for port in other.ports.values()
+        }
+        renamed_ports = {
+            port.full_name: "%s.%s" % (new_id, port.name)
+            for port in node.ports.values()
+        }
+        collisions = endpoint_names.intersection(renamed_ports.values())
+        if collisions:
+            raise WiringError(
+                "Renaming would duplicate HAL pins: %s"
+                % ", ".join(sorted(collisions))
+            )
+
+        for signal in self.signals.values():
+            signal.source = renamed_ports.get(signal.source, signal.source)
+            signal.destinations = [
+                renamed_ports.get(destination, destination)
+                for destination in signal.destinations
+            ]
+        for port in node.ports.values():
+            port.full_name = "%s.%s" % (new_id, port.name)
+        for parameter in node.parameters.values():
+            parameter.full_name = "%s.%s" % (new_id, parameter.name)
+
+        if node.title.startswith(old_id):
+            node.title = new_id + node.title[len(old_id) :]
+        else:
+            node.title = new_id
+        node.node_id = new_id
+
+        # Preserve the block's relative order in the library and project file.
+        self.nodes = {
+            (new_id if node_id == old_id else node_id): value
+            for node_id, value in self.nodes.items()
+        }
+        return node
 
     def _signal_for_port(self, full_name: str) -> Optional[Signal]:
         for signal in self.signals.values():

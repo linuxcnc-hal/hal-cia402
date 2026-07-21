@@ -389,6 +389,46 @@ class WiringTests(unittest.TestCase):
         self.assertNotIn("lcec.0.0.actual-position", restored.ports)
         self.assertIn("lcec.0.0.actual-position", restored.all_ports)
 
+    def test_renaming_block_updates_pins_parameters_and_wiring(self):
+        self.project.connect(
+            "lcec.0.0.cia-statusword", "cia402.0.statusword", "x-statusword"
+        )
+
+        node = self.project.rename_node("lcec.0.0", "lcec.0.2")
+
+        self.assertEqual(node.node_id, "lcec.0.2")
+        self.assertTrue(node.title.startswith("lcec.0.2"))
+        self.assertNotIn("lcec.0.0", self.project.nodes)
+        self.assertIn("lcec.0.2.cia-statusword", self.project.all_ports)
+        self.assertEqual(
+            self.project.signals["x-statusword"].source,
+            "lcec.0.2.cia-statusword",
+        )
+        output = generate_hal(self.project)
+        self.assertIn("lcec.0.2.cia-statusword", output)
+        self.assertNotIn("lcec.0.0.cia-statusword", output)
+
+        self.project.rename_node("cia402.0", "cia402.3")
+        self.assertEqual(
+            self.project.nodes["cia402.3"].parameters["pos-scale"].full_name,
+            "cia402.3.pos-scale",
+        )
+        self.assertEqual(
+            self.project.signals["x-statusword"].destinations,
+            ["cia402.3.statusword"],
+        )
+        output = generate_hal(self.project)
+        self.assertIn("setp cia402.3.pos-scale", output)
+        self.assertIn("=> cia402.3.statusword", output)
+
+    def test_renaming_block_rejects_duplicate_name(self):
+        with self.assertRaisesRegex(WiringError, "already exists"):
+            self.project.rename_node("lcec.0.0", "cia402.0")
+
+    def test_renaming_block_rejects_invalid_hal_name(self):
+        with self.assertRaisesRegex(WiringError, "Invalid HAL block name"):
+            self.project.rename_node("lcec.0.0", "lcec block 2")
+
     def test_invalid_parameter_text_cannot_be_injected_into_hal(self):
         self.component.parameters["pos-scale"].value = "1\nnet injected"
 
