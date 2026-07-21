@@ -1,79 +1,141 @@
-# hal-cia402
-HAL Interface for CiA402 Devices,
+# LinuxCNC HAL CiA 402
 
-## Graphical HAL wiring editor
+`hal-cia402` is a LinuxCNC realtime HAL component and graphical wiring editor
+for CiA 402 servo drives. The component sits between LinuxCNC motion and a
+fieldbus driver such as LinuxCNC EtherCAT (`lcec`), providing:
 
-This repository includes an initial graphical editor for building the HAL
-connections between LinuxCNC joints, `cia402` instances, and the PDO pins
-declared in `ethercat-conf.xml`.
+- CiA 402 state-machine control
+- Cyclic Synchronous Position (CSP) and Velocity (CSV) operation
+- Position and velocity scaling
+- Drive feedback and fault reporting
+- Drive-internal homing support
+- A block-based editor for generating HAL signal connections
 
-The editor provides:
+The fieldbus transport is intentionally separate from this component. EtherCAT,
+CANopen, or another HAL driver supplies the raw drive objects; `cia402` converts
+them to the pins normally used by LinuxCNC motion.
 
-* Simulink-style blocks, ports, and drag-to-connect wires.
-* Automatic parsing of `cia402.comp` pins and parameters.
-* Automatic parsing of EtherCAT `pdoEntry` pins, types, and directions.
-* LinuxCNC joint blocks based on the `motion(9)` joint interface.
-* HAL type, direction, duplicate writer, and duplicate signal validation.
-* Searchable live parameter editing for joint, `cia402`, and `lcec` blocks.
-* Project save/load using JSON and deterministic `.hal` file export.
-* Reversible block removal with an Available Blocks palette.
-* Per-block signal selection so blocks start compact and only show requested pins.
+```text
+fieldbus read -> cia402.read-all -> LinuxCNC motion/PID
+LinuxCNC motion/PID -> cia402.write-all -> fieldbus write
+```
 
-Install the Qt dependency on a LinuxCNC Debian installation:
+> **Safety:** Test generated HAL configuration with the machine unable to move.
+> Verify scaling, feedback direction, limits, enable behavior, and emergency-stop
+> operation before applying power to an axis.
+
+## Requirements
+
+- LinuxCNC with development tools, including `halcompile`
+- A configured hardware HAL driver, such as LinuxCNC EtherCAT
+- Python 3.8 or newer and PyQt5 for the graphical editor
+
+On a Debian-based LinuxCNC installation, install the GUI dependency with:
 
 ```bash
+sudo apt update
 sudo apt install python3-pyqt5
 ```
 
-Start the editor while LinuxCNC is running:
+## Install the realtime component
+
+Clone the repository and install `cia402.comp` using LinuxCNC's component
+compiler:
+
+```bash
+git clone https://github.com/linuxcnc-hal/hal-cia402.git
+cd hal-cia402
+sudo halcompile --install cia402.comp
+```
+
+Load one instance per drive in your HAL configuration:
+
+```hal
+loadrt cia402 count=3
+```
+
+The component exports `cia402.N.read-all` and `cia402.N.write-all`. Add them to
+the servo thread around the motion controller and any PID calculations:
+
+```hal
+addf lcec.read-all servo-thread
+
+addf cia402.0.read-all servo-thread
+addf cia402.1.read-all servo-thread
+addf cia402.2.read-all servo-thread
+
+addf motion-command-handler servo-thread
+addf motion-controller servo-thread
+# Add PID or other control functions here when required.
+
+addf cia402.0.write-all servo-thread
+addf cia402.1.write-all servo-thread
+addf cia402.2.write-all servo-thread
+
+addf lcec.write-all servo-thread
+```
+
+See [example/cia402.hal](example/cia402.hal) for a complete three-axis snippet.
+
+## Graphical HAL wiring editor
+
+The included editor provides a Simulink-style view of LinuxCNC joints, `cia402`
+instances, and the PDO pins declared in `ethercat-conf.xml`. It validates HAL
+types and signal direction, prevents multiple writers, and exports a
+deterministic `.hal` file.
+
+Start LinuxCNC first so its live HAL pins are available, then run the editor
+from the repository root:
 
 ```bash
 python3 -m cia402_gui
 ```
 
-The editor automatically discovers the loaded `joint.N.*` and `cia402.N.*`
-pins and current `cia402` parameter values. Use **File > Import EtherCAT XML**
-to select `ethercat-conf.xml`; no joint or component counts are required.
-Discovery uses the LinuxCNC Python HAL API and falls back to `halcmd` on older
-installations. Press **F5** to refresh the live HAL blocks.
+The canvas starts empty. Discovered blocks are organized in the **Block
+library** as:
 
-The canvas starts empty. Every discovered block is placed in the categorized
-**Block library** instead:
+- **LinuxCNC joints** — motion command, feedback, enable, and homing pins
+- **CiA 402 drive interface** — state control, scaling, drive data, and modes
+- **EtherCAT / LCEC** — PDO communication with each physical slave
+- **Other** — additional discovered HAL components
 
-* **LinuxCNC joints** — motion commands, amplifier control, and feedback.
-* **CiA 402 drive interface** — drive state control, scaling, modes, and homing.
-* **EtherCAT / LCEC** — PDO communication with the physical slave.
+The normal data path is:
 
-This presents the intended path as `LinuxCNC joint -> CiA 402 -> EtherCAT/LCEC`.
-Double-click an available block to add it to the canvas. The library continues
-to show added blocks with an **on canvas** status; double-clicking one focuses
-it. Importing XML adds blocks to the library without placing them automatically.
+```text
+LinuxCNC joint <-> CiA 402 interface <-> EtherCAT/LCEC
+```
 
-### Goto/From signal routing
+### Basic workflow
 
-Long connections can be displayed using Simulink-style Goto/From tags:
+1. Choose **File > Import EtherCAT XML** and select `ethercat-conf.xml`.
+2. Double-click blocks in the **Block library** to add them to the canvas.
+3. Select a block and add only the required pins from **Block signals**.
+4. Drag between compatible pins and enter a HAL signal name.
+5. Double-click a block to inspect and edit its writable parameters.
+6. Choose **File > Preview HAL** to review the result.
+7. Choose **File > Export HAL** to create `cia402-generated.hal`.
 
-1. Right-click an output pin and choose **Create Goto signal**.
-2. Enter the HAL signal name.
-3. Right-click a compatible input pin and choose **Connect from Goto**.
-4. Select the named signal.
+Load the generated connections from your main HAL configuration:
 
-The canvas displays a short wire to `Goto <signal>` at the writer and a short
-wire from `From <signal>` at its reader. After a Goto is assigned, it is removed
-from all **Connect from Goto** selection lists to prevent accidental reuse.
-HAL export still emits one ordinary `net` command containing the real source
-and destination. Right-click a direct wire to convert it to Goto/From display,
-or right-click a tag to return to a direct wire. Goto/From display mode is saved
-with the project.
+```hal
+source cia402-generated.hal
+```
 
-Goto and From tags can also be selected and removed with **Delete** or their
-context menus. Deleting a Goto removes the complete HAL signal and all its From
-tags. Deleting a From disconnects only that reader. Deleting a direct wire has
-the same per-reader behavior. If the final reader is disconnected, the unused
-HAL signal is deleted automatically; fan-out signals remain while at least one
-reader is still connected.
+Keep component loading and realtime thread ordering in the main configuration;
+the generated file contains signal connections and writable parameter values.
 
-An XML file can still be opened directly from the command line:
+### Live discovery and XML import
+
+The editor discovers loaded `joint.N.*`, `cia402.N.*`, and related parameters
+through the LinuxCNC Python HAL API, with `halcmd` as a fallback. Press **F5**
+to refresh live HAL objects.
+
+Importing EtherCAT XML adds its `lcec.M.S` blocks without duplicating existing
+ones. Blocks are not placed on the canvas automatically. Re-importing or
+reloading XML also preserves the current placement, selected pins, and blocks
+that were intentionally removed from the canvas.
+
+For offline use, an XML file and fallback counts can be supplied explicitly:
 
 ```bash
 python3 -m cia402_gui \
@@ -83,132 +145,130 @@ python3 -m cia402_gui \
     --instances 3
 ```
 
-Drag from one port to another and enter a HAL signal name. Double-click any
-block to inspect all parameters discovered from the running HAL. Writable
-parameters are marked `RW` and can be edited; read-only parameters are marked
-`RO` and shown for reference. The parameter dialog includes search, and HAL
-export emits `setp` only for writable parameters. Use **File > Preview HAL**
-to inspect the output and **File > Export HAL** to write
-`cia402-generated.hal`.
+### Blocks, pins, and parameters
 
-Newly discovered and imported blocks initially show no signals. Select a block
-to open the **Block signals** panel, search its available pins, and double-click
-or press **Add selected** to place only the pins you need on the block. Remove
-shown pins from the same panel, or right-click a pin and choose **Remove signal
-from block**. If a connected pin is removed, its HAL connection is suspended
-and is restored when the pin is added again. Older saved projects retain their
-existing visible-pin layout. Signal lists are grouped first by direction
-(Inputs, Outputs, and Bidirectional) and then by HAL type (`bit`, `float`,
-`s32`, `u32`, `s64`, and `u64`). Each group displays its signal count.
+New blocks initially have no visible pins. Select a block to open **Block
+signals**, where pins are grouped by direction and HAL type (`bit`, `float`,
+`s32`, `u32`, `s64`, and `u64`). Add or remove individual pins as needed.
 
-Select a block and press **Delete**, or right-click it and choose **Remove
-block**, to remove it from the canvas. Removed blocks appear in the
-**Available blocks** panel. Double-click one there to add it back. Connections
-to a removed block are suspended and return when the block is restored.
-Re-importing an EtherCAT XML file merges blocks by their `lcec.M.S` name, so
-existing blocks are not duplicated and intentionally removed blocks stay in
-the Available Blocks panel.
+Removing a connected pin suspends its connection; adding the pin again restores
+it. Removing a block from the canvas works the same way. The block remains in
+the library and can be added again later without losing its wiring.
 
-The generated file contains component parameters and signal connections. Keep
-it separate from hand-written setup and thread-order configuration, then load
-it from the main HAL configuration with:
+Double-click a block to open its searchable parameter view. Writable values are
+marked `RW` and may be edited; read-only values are marked `RO`. Only writable
+parameters are emitted as `setp` commands during export.
+
+### Goto/From routing
+
+Long wires can be represented with Simulink-style Goto/From tags:
+
+1. Right-click an output pin and select **Create Goto signal**.
+2. Enter the HAL signal name.
+3. Right-click a compatible input and select **Connect from Goto**.
+4. Select the named signal.
+
+Once assigned, that Goto signal is removed from other **Connect from Goto**
+lists to prevent accidental reuse. Goto/From is only a visual representation;
+HAL export writes an ordinary `net` connection.
+
+Direct wires can be converted to Goto/From display from their context menu.
+Deleting a Goto removes the entire HAL signal and all associated From tags.
+Deleting a From or a direct wire disconnects only that destination; if it was
+the final destination, the unused HAL signal is removed automatically.
+
+### Projects
+
+Use **File > Save Project** to store the canvas as JSON and **File > Open
+Project** to restore it. Projects retain block positions, selected pins,
+parameter edits, signal routes, and suspended connections.
+
+## Manual HAL wiring example
+
+The following example connects one LinuxCNC joint through `cia402.0` to one
+EtherCAT slave. PDO names vary by EtherCAT configuration, so use the names
+exported by your own `ethercat-conf.xml`.
 
 ```hal
-source cia402-generated.hal
+# Component configuration
+setp cia402.0.csp-mode 1
+setp cia402.0.pos-scale 10000000
+
+# LinuxCNC motion <-> CiA 402
+net x-enable  joint.0.amp-enable-out => cia402.0.enable
+net x-pos-cmd joint.0.motor-pos-cmd  => cia402.0.pos-cmd
+net x-pos-fb  cia402.0.pos-fb        => joint.0.motor-pos-fb
+
+# EtherCAT drive -> CiA 402
+net x-statusword lcec.0.0.statusword      => cia402.0.statusword
+net x-mode-fb    lcec.0.0.mode-display    => cia402.0.opmode-display
+net x-actual-pos lcec.0.0.actual-position => cia402.0.drv-actual-position
+net x-actual-vel lcec.0.0.actual-velocity => cia402.0.drv-actual-velocity
+
+# CiA 402 -> EtherCAT drive
+net x-controlword cia402.0.controlword         => lcec.0.0.controlword
+net x-mode-cmd    cia402.0.opmode              => lcec.0.0.mode-of-operation
+net x-target-pos  cia402.0.drv-target-position => lcec.0.0.target-position
+net x-target-vel  cia402.0.drv-target-velocity => lcec.0.0.target-velocity
 ```
 
-Run the parser, validation, and generator tests without Qt:
+## Operation modes
+
+The component starts in CSP mode by default:
+
+```hal
+setp cia402.0.csp-mode 1
+```
+
+Select CSV mode before LinuxCNC starts by setting:
+
+```hal
+setp cia402.0.csp-mode 0
+```
+
+Runtime switching between CSP and CSV is intentionally unsupported.
+
+The available writable component parameters are:
+
+| Parameter | Default | Purpose |
+| --- | ---: | --- |
+| `pos-scale` | `1.0` | Drive position increments per machine unit |
+| `velo-scale` | `1.0` | Drive velocity units per machine velocity unit |
+| `auto-fault-reset` | `1` | Reset a drive fault automatically on the next enable edge |
+| `csp-mode` | `1` | `1` for CSP, `0` for CSV; read at component startup |
+
+## Drive-internal homing
+
+To use the drive's homing procedure, configure the joint for index-only homing
+and connect `cia402.N.home` to `joint.N.index-enable`:
+
+```ini
+HOME_SEARCH_VEL = 0.0
+HOME_LATCH_VEL = 0.2
+HOME_USE_INDEX = TRUE
+```
+
+`HOME_LATCH_VEL` must be non-zero; the drive's own configuration determines the
+actual homing speed. If a PID component is used, include its `index-enable` pin
+in the same HAL signal.
+
+## Development
+
+The parser, model, project serialization, validation, and HAL generator tests do
+not require Qt:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-this component acts as a glue layer between hardware to Hal modules like Ethercat, CAN-Bus or others.
+To install the editor as a Python package during development:
 
-It translates raw IO Data from the PDOs to the common linuxcnc Hal pin structure and has build in logic
-for the CiA402 State Control, feedback handling, external homing and build in scaling functions.
+```bash
+python3 -m pip install -e .
+cia402-wiring-gui
+```
 
-It delivers two functions: read_all and write_all.
+## License
 
-
-The concept of integration in the correspondending task should be as following: 
-
-
-
-  HARDWARE INPUT-->--CiA402_read-->--Motion-->--CiA402_write-->--Hardware Output
-
-Hal Example:
-
-  #Setup
-
-    loadrt [KINS]KINEMATICS
-
-    loadrt [EMCMOT]EMCMOT servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[KINS]JOINTS
-
-    (loadusr -W lcec_conf ethercat-conf.xml)
-
-    loadrt lcec
-
-    loadrt cia402 count=3
-
-    loadrt pid names=x-pid,y-pid,z-pid
-
-
-
-  #Functions servo-thread
-
-    addf lcec.read-all servo-thread
-
-    addf cia402.0.read-all servo-thread
-
-    addf cia402.1.read-all servo-thread
-
-    addf cia402.2.read-all servo-thread
-
-    addf motion/ PIDs / PCL / etc .
-
-    addf cia402.0.write-all servo-thread
-
-    addf cia402.1.write-all servo-thread
-
-    addf cia402.2.write-all servo-thread
-
-    addf lcec.write-all servo-thread
-
-  
-  #nets .....
-
-
-
-Modes of Operation: 
-
-  By default the component is set to CSP Mode, CSV Mode could be selected with an: 
-  
-    setp cia402.0.csp-mode 0  in hal.
-
-  Mode changing in runtime is currently not supported, to avoid
-  unwanted behaviour.
-
-Homing:
-
-  For using the servo drives internal homing procedure configure your
-  joint homing to  Home on Index Pulse only and connect the components
-  home input to the motion index-enable Pin:
-
-    HOME_SEARCH_VEL = 0.0
-    HOME_LATCH_VEL = 0.2  (Any value but zero, the homing speed is predetermined by the drives configured speed
-    HOME_USE_INDEX = TRUE
-
-  If you are using PIDs, don't forget to connect the PIDs index-enable pin.
-
-
-Flexibility:
-
-  Even though this component exports many pins, you can choose which functions you want to use:
-
-  If you would like to use the CiA State Machine, connect Statusword and Controlword.
-
-  For single use of the scaling function connect only the fb and cmd pins from position or velocity.
-
-  If no Drives homing is needed, let the Pins unconnected.
-
+This project is distributed under the GNU General Public License. See
+[LICENSE](LICENSE) for details.
