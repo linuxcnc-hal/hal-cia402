@@ -655,6 +655,7 @@ class WiringScene(QtWidgets.QGraphicsScene):
             source = self.project.ports.get(signal.source)
             if (
                 signal.routed
+                and not signal.destinations
                 and source is not None
                 and source.data_type == destination.data_type
                 and destination_name not in signal.destinations

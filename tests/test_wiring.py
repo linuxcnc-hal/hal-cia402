@@ -224,6 +224,21 @@ class WiringTests(unittest.TestCase):
         with self.assertRaisesRegex(WiringError, "Type mismatch"):
             self.project.connect_from("x-enable", "cia402.0.pos-cmd")
 
+    def test_goto_disappears_after_one_from_assignment(self):
+        self.project.create_goto("joint.0.amp-enable-out", "x-enable")
+        self.project.connect_from("x-enable", "cia402.0.enable")
+        consumer = Node(node_id="consumer", title="consumer", kind="test")
+        consumer.ports["enable"] = Port(
+            name="enable",
+            full_name="consumer.enable",
+            direction=Direction.INPUT,
+            data_type=DataType.BIT,
+        )
+        self.project.add_node(consumer)
+
+        with self.assertRaisesRegex(WiringError, "already assigned"):
+            self.project.connect_from("x-enable", "consumer.enable")
+
     def test_goto_from_display_mode_survives_project_round_trip(self):
         self.project.create_goto("joint.0.motor-pos-cmd", "x-pos-command")
         self.project.connect_from("x-pos-command", "cia402.0.pos-cmd")

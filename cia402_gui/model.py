@@ -186,6 +186,10 @@ class WiringProject:
         if signal_name not in self.signals:
             raise WiringError("Unknown Goto signal: %s" % signal_name)
         signal = self.signals[signal_name]
+        if signal.destinations:
+            raise WiringError(
+                "Goto signal %s is already assigned to a From block" % signal_name
+            )
         ports = self.ports
         source = ports.get(signal.source)
         destination = ports.get(destination_name)

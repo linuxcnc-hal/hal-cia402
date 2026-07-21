@@ -59,10 +59,12 @@ Long connections can be displayed using Simulink-style Goto/From tags:
 4. Select the named signal.
 
 The canvas displays a short wire to `Goto <signal>` at the writer and a short
-wire from `From <signal>` at every reader. HAL export still emits one ordinary
-`net` command containing the real source and destinations. Right-click a direct
-wire to convert it to Goto/From display, or right-click a tag to return to a
-direct wire. Goto/From display mode is saved with the project.
+wire from `From <signal>` at its reader. After a Goto is assigned, it is removed
+from all **Connect from Goto** selection lists to prevent accidental reuse.
+HAL export still emits one ordinary `net` command containing the real source
+and destination. Right-click a direct wire to convert it to Goto/From display,
+or right-click a tag to return to a direct wire. Goto/From display mode is saved
+with the project.
 
 Goto and From tags can also be selected and removed with **Delete** or their
 context menus. Deleting a Goto removes the complete HAL signal and all its From
