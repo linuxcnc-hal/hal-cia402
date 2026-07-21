@@ -1,6 +1,62 @@
 # hal-cia402
 HAL Interface for CiA402 Devices,
 
+## Graphical HAL wiring editor
+
+This repository includes an initial graphical editor for building the HAL
+connections between LinuxCNC joints, `cia402` instances, and the PDO pins
+declared in `ethercat-conf.xml`.
+
+The editor provides:
+
+* Simulink-style blocks, ports, and drag-to-connect wires.
+* Automatic parsing of `cia402.comp` pins and parameters.
+* Automatic parsing of EtherCAT `pdoEntry` pins, types, and directions.
+* LinuxCNC joint blocks based on the `motion(9)` joint interface.
+* HAL type, direction, duplicate writer, and duplicate signal validation.
+* Editable `cia402` parameters by double-clicking a component block.
+* Project save/load using JSON and deterministic `.hal` file export.
+
+Install the Qt dependency on a LinuxCNC Debian installation:
+
+```bash
+sudo apt install python3-pyqt5
+```
+
+Start the editor with the included example:
+
+```bash
+python3 -m cia402_gui
+```
+
+Or open a particular EtherCAT configuration:
+
+```bash
+python3 -m cia402_gui \
+    --xml /path/to/ethercat-conf.xml \
+    --comp /path/to/cia402.comp \
+    --joints 3 \
+    --instances 3
+```
+
+Drag from one port to another and enter a HAL signal name. Double-click a
+`cia402` block to edit its parameters. Use **File > Preview HAL** to inspect
+the output and **File > Export HAL** to write `cia402-generated.hal`.
+
+The generated file contains component parameters and signal connections. Keep
+it separate from hand-written setup and thread-order configuration, then load
+it from the main HAL configuration with:
+
+```hal
+source cia402-generated.hal
+```
+
+Run the parser, validation, and generator tests without Qt:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 this component acts as a glue layer between hardware to Hal modules like Ethercat, CAN-Bus or others.
 
 It translates raw IO Data from the PDOs to the common linuxcnc Hal pin structure and has build in logic

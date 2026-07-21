@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hal-cia402-wiring-gui"
+version = "0.1.0"
+description = "Graphical HAL wiring editor for LinuxCNC CiA 402 drives"
+requires-python = ">=3.8"
+dependencies = ["PyQt5>=5.15"]
+
+[project.scripts]
+cia402-wiring-gui = "cia402_gui.__main__:main"
+
+[tool.setuptools]
+packages = ["cia402_gui"]
+
