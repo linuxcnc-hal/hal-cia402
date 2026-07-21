@@ -16,6 +16,7 @@ The editor provides:
 * HAL type, direction, duplicate writer, and duplicate signal validation.
 * Editable `cia402` parameters by double-clicking a component block.
 * Project save/load using JSON and deterministic `.hal` file export.
+* Reversible block removal with an Available Blocks palette.
 
 Install the Qt dependency on a LinuxCNC Debian installation:
 
@@ -48,6 +49,14 @@ python3 -m cia402_gui \
 Drag from one port to another and enter a HAL signal name. Double-click a
 `cia402` block to edit its parameters. Use **File > Preview HAL** to inspect
 the output and **File > Export HAL** to write `cia402-generated.hal`.
+
+Select a block and press **Delete**, or right-click it and choose **Remove
+block**, to remove it from the canvas. Removed blocks appear in the
+**Available blocks** panel. Double-click one there to add it back. Connections
+to a removed block are suspended and return when the block is restored.
+Re-importing an EtherCAT XML file merges blocks by their `lcec.M.S` name, so
+existing blocks are not duplicated and intentionally removed blocks stay in
+the Available Blocks panel.
 
 The generated file contains component parameters and signal connections. Keep
 it separate from hand-written setup and thread-order configuration, then load

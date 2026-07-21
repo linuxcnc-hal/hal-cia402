@@ -110,6 +110,23 @@ def build_project(
     return project
 
 
+def merge_project(target: WiringProject, incoming: WiringProject) -> None:
+    """Merge refreshed block definitions without duplicating canvas blocks."""
+
+    for node_id, new_node in incoming.nodes.items():
+        old_node = target.nodes.get(node_id)
+        if old_node is None:
+            target.add_node(new_node)
+            continue
+        new_node.active = old_node.active
+        new_node.position = old_node.position
+        for name, parameter in new_node.parameters.items():
+            if name in old_node.parameters:
+                parameter.value = old_node.parameters[name].value
+        target.nodes[node_id] = new_node
+    target.source_files.update(incoming.source_files)
+
+
 class PortItem(QtWidgets.QGraphicsEllipseItem):
     RADIUS = 6.0
 
@@ -206,6 +223,14 @@ class NodeItem(QtWidgets.QGraphicsRectItem):
         else:
             super().mouseDoubleClickEvent(event)
 
+    def contextMenuEvent(self, event) -> None:
+        menu = QtWidgets.QMenu()
+        remove_action = menu.addAction("Remove block")
+        selected = menu.exec(event.screenPos()) if hasattr(menu, "exec") else menu.exec_(event.screenPos())
+        if selected == remove_action:
+            self.editor.remove_node(self.node.node_id)
+        event.accept()
+
 
 class WireItem(QtWidgets.QGraphicsPathItem):
     def __init__(self, signal_name: str, source: PortItem, destination: PortItem) -> None:
@@ -253,6 +278,8 @@ class WiringScene(QtWidgets.QGraphicsScene):
         self.port_items.clear()
         self.wire_items.clear()
         for node in self.project.nodes.values():
+            if not node.active:
+                continue
             item = NodeItem(node, self)
             self.addItem(item)
             self.node_items[node.node_id] = item
@@ -264,7 +291,7 @@ class WiringScene(QtWidgets.QGraphicsScene):
         for wire in self.wire_items:
             self.removeItem(wire)
         self.wire_items = []
-        for signal in self.project.signals.values():
+        for signal in self.project.active_signals():
             source = self.port_items.get(signal.source)
             if source is None:
                 continue
@@ -367,6 +394,31 @@ class WiringScene(QtWidgets.QGraphicsScene):
             self.rebuild_wires()
             self.project_changed.emit()
 
+    def remove_node(self, node_id: str) -> None:
+        self.project.deactivate_node(node_id)
+        self.rebuild()
+        self.project_changed.emit()
+
+    def restore_node(self, node_id: str) -> None:
+        self.project.activate_node(node_id)
+        self.rebuild()
+        self.project_changed.emit()
+
+    def delete_selected_items(self) -> None:
+        signal_names = {
+            item.signal_name for item in self.selectedItems() if isinstance(item, WireItem)
+        }
+        node_ids = {
+            item.node.node_id for item in self.selectedItems() if isinstance(item, NodeItem)
+        }
+        for name in signal_names:
+            self.project.remove_signal(name)
+        for node_id in node_ids:
+            self.project.deactivate_node(node_id)
+        if signal_names or node_ids:
+            self.rebuild()
+            self.project_changed.emit()
+
 
 class WiringView(QtWidgets.QGraphicsView):
     def __init__(self, scene: WiringScene, parent=None) -> None:
@@ -388,7 +440,7 @@ class WiringView(QtWidgets.QGraphicsView):
 
     def keyPressEvent(self, event) -> None:
         if event.key() == QtCore.Qt.Key_Delete:
-            self.scene().delete_selected_wires()
+            self.scene().delete_selected_items()
             event.accept()
         else:
             super().keyPressEvent(event)
@@ -410,9 +462,17 @@ class SignalDock(QtWidgets.QDockWidget):
 
     def refresh(self) -> None:
         self.list.clear()
+        active = {signal.name: signal for signal in self.window.project.active_signals()}
         for signal in self.window.project.signals.values():
-            text = "%s\n  %s  →  %s" % (
-                signal.name,
+            active_signal = active.get(signal.name)
+            if active_signal is None:
+                state = "  [suspended]"
+            elif len(active_signal.destinations) != len(signal.destinations):
+                state = "  [partly suspended]"
+            else:
+                state = ""
+            text = "%s\n  %s  ->  %s" % (
+                signal.name + state,
                 signal.source,
                 ", ".join(signal.destinations),
             )
@@ -446,6 +506,41 @@ class SignalDock(QtWidgets.QDockWidget):
         self.window.scene.rebuild_wires()
         self.window.project_modified()
 
+
+class AvailableBlocksDock(QtWidgets.QDockWidget):
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__("Available blocks", window)
+        self.window = window
+        container = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(container)
+        explanation = QtWidgets.QLabel(
+            "Removed blocks remain available here.\nDouble-click a block to restore it."
+        )
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        self.list = QtWidgets.QListWidget()
+        self.list.itemDoubleClicked.connect(self.restore_selected)
+        layout.addWidget(self.list)
+        add_button = QtWidgets.QPushButton("Add block")
+        add_button.clicked.connect(self.restore_selected)
+        layout.addWidget(add_button)
+        self.setWidget(container)
+
+    def refresh(self) -> None:
+        self.list.clear()
+        for node in self.window.project.nodes.values():
+            if node.active:
+                continue
+            item = QtWidgets.QListWidgetItem("%s    [%s]" % (node.node_id, node.kind))
+            item.setData(QtCore.Qt.UserRole, node.node_id)
+            self.list.addItem(item)
+
+    def restore_selected(self, item=None) -> None:
+        if not isinstance(item, QtWidgets.QListWidgetItem):
+            item = self.list.currentItem()
+        if not item:
+            return
+        self.window.scene.restore_node(item.data(QtCore.Qt.UserRole))
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, project: WiringProject, comp_path: Path) -> None:
@@ -483,12 +578,18 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "signal_dock"):
             self.removeDockWidget(self.signal_dock)
             self.signal_dock.deleteLater()
+        if hasattr(self, "available_blocks_dock"):
+            self.removeDockWidget(self.available_blocks_dock)
+            self.available_blocks_dock.deleteLater()
         self.signal_dock = SignalDock(self)
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.signal_dock)
+        self.available_blocks_dock = AvailableBlocksDock(self)
+        self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, self.available_blocks_dock)
         self.signal_dock.refresh()
+        self.available_blocks_dock.refresh()
 
     def _create_actions(self) -> None:
-        self.new_action = QAction("Import EtherCAT XML…", self)
+        self.new_action = QAction("Import or reload EtherCAT XML…", self)
         self.new_action.setShortcut("Ctrl+N")
         self.new_action.triggered.connect(self.new_from_xml)
         self.refresh_action = QAction("Refresh live LinuxCNC HAL", self)
@@ -533,6 +634,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def project_modified(self) -> None:
         self.dirty = True
         self.signal_dock.refresh()
+        self.available_blocks_dock.refresh()
         if not self.windowTitle().endswith(" *"):
             self.setWindowTitle(self.windowTitle() + " *")
 
@@ -553,24 +655,21 @@ class MainWindow(QtWidgets.QMainWindow):
         return result == QtWidgets.QMessageBox.Yes
 
     def new_from_xml(self) -> None:
-        if not self._confirm_discard():
-            return
         filename, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Open EtherCAT configuration", "", "EtherCAT XML (*.xml);;All files (*)"
         )
         if not filename:
             return
         try:
-            project = build_project(Path(filename), self.comp_path)
+            incoming = build_project(Path(filename), self.comp_path)
+            merge_project(self.project, incoming)
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Cannot load configuration", str(exc))
             return
-        self._set_project(project)
-        self.project_path = None
-        self.dirty = False
-        self.setWindowTitle("CiA 402 HAL Wiring Editor")
+        self.scene.rebuild()
+        self.project_modified()
         self.statusBar().showMessage(
-            "Imported %s. Drag between ports to create HAL signals." % filename, 8000
+            "Merged %s. Existing and removed blocks were not duplicated." % filename, 8000
         )
 
     def refresh_live_hal(self) -> None:

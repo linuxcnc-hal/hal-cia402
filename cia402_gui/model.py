@@ -59,6 +59,7 @@ class Node:
     ports: Dict[str, Port] = field(default_factory=dict)
     parameters: Dict[str, Parameter] = field(default_factory=dict)
     position: Tuple[float, float] = (0.0, 0.0)
+    active: bool = True
 
 
 @dataclass
@@ -85,13 +86,22 @@ class WiringProject:
         return {
             port.full_name: port
             for node in self.nodes.values()
+            if node.active
+            for port in node.ports.values()
+        }
+
+    @property
+    def all_ports(self) -> Dict[str, Port]:
+        return {
+            port.full_name: port
+            for node in self.nodes.values()
             for port in node.ports.values()
         }
 
     def add_node(self, node: Node) -> None:
         if node.node_id in self.nodes:
             raise WiringError("Duplicate node: %s" % node.node_id)
-        duplicate_ports = set(self.ports).intersection(p.full_name for p in node.ports.values())
+        duplicate_ports = set(self.all_ports).intersection(p.full_name for p in node.ports.values())
         if duplicate_ports:
             raise WiringError("Duplicate ports: %s" % ", ".join(sorted(duplicate_ports)))
         self.nodes[node.node_id] = node
@@ -173,6 +183,37 @@ class WiringProject:
     def remove_signal(self, name: str) -> None:
         self.signals.pop(name, None)
 
+    def deactivate_node(self, node_id: str) -> None:
+        if node_id not in self.nodes:
+            raise WiringError("Unknown block: %s" % node_id)
+        self.nodes[node_id].active = False
+
+    def activate_node(self, node_id: str) -> None:
+        if node_id not in self.nodes:
+            raise WiringError("Unknown block: %s" % node_id)
+        self.nodes[node_id].active = True
+
+    def active_signals(self) -> List[Signal]:
+        active_ports = self.ports
+        result: List[Signal] = []
+        for signal in self.signals.values():
+            if signal.source not in active_ports:
+                continue
+            destinations = [
+                destination
+                for destination in signal.destinations
+                if destination in active_ports
+            ]
+            if destinations:
+                result.append(
+                    Signal(
+                        name=signal.name,
+                        source=signal.source,
+                        destinations=destinations,
+                    )
+                )
+        return result
+
     def rename_signal(self, old_name: str, new_name: str) -> None:
         if old_name not in self.signals:
             raise WiringError("Unknown signal: %s" % old_name)
@@ -186,7 +227,7 @@ class WiringProject:
     def validate(self) -> List[str]:
         errors: List[str] = []
         ports = self.ports
-        for signal in self.signals.values():
+        for signal in self.active_signals():
             try:
                 self.validate_signal_name(signal.name)
             except WiringError as exc:
@@ -217,6 +258,7 @@ class WiringProject:
                     "title": node.title,
                     "kind": node.kind,
                     "position": list(node.position),
+                    "active": node.active,
                     "ports": [
                         {
                             "name": p.name,
@@ -260,6 +302,7 @@ class WiringProject:
                 title=raw_node["title"],
                 kind=raw_node["kind"],
                 position=tuple(raw_node.get("position", (0.0, 0.0))),
+                active=bool(raw_node.get("active", True)),
             )
             for raw_port in raw_node.get("ports", []):
                 port = Port(

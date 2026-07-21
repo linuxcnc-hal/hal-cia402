@@ -219,6 +219,30 @@ class WiringTests(unittest.TestCase):
             "10000000",
         )
 
+    def test_removing_and_restoring_block_suspends_and_restores_wiring(self):
+        self.project.connect(
+            "joint.0.motor-pos-cmd", "cia402.0.pos-cmd", "x-pos-cmd"
+        )
+
+        self.project.deactivate_node("cia402.0")
+        hidden_output = generate_hal(self.project)
+        self.assertNotIn("net x-pos-cmd", hidden_output)
+        self.assertNotIn("setp cia402.0.pos-scale", hidden_output)
+
+        self.project.activate_node("cia402.0")
+        restored_output = generate_hal(self.project)
+        self.assertIn("net x-pos-cmd", restored_output)
+        self.assertIn("setp cia402.0.pos-scale", restored_output)
+
+    def test_removed_block_state_is_saved_in_project(self):
+        self.project.deactivate_node("lcec.0.0")
+
+        restored = WiringProject.from_dict(self.project.to_dict())
+
+        self.assertFalse(restored.nodes["lcec.0.0"].active)
+        self.assertNotIn("lcec.0.0.cia-statusword", restored.ports)
+        self.assertIn("lcec.0.0.cia-statusword", restored.all_ports)
+
     def test_invalid_parameter_text_cannot_be_injected_into_hal(self):
         self.component.parameters["pos-scale"].value = "1\nnet injected"
 

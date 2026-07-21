@@ -54,6 +54,7 @@ def generate_hal(project: WiringProject, include_timestamp: bool = False) -> str
     parameters = [
         parameter
         for node in project.nodes.values()
+        if node.active
         for parameter in node.parameters.values()
     ]
     if parameters:
@@ -64,9 +65,10 @@ def generate_hal(project: WiringProject, include_timestamp: bool = False) -> str
                 % (parameter.full_name, _format_parameter(parameter.data_type, parameter.value))
             )
 
-    if project.signals:
+    active_signals = project.active_signals()
+    if active_signals:
         lines.extend(("", "# Signal connections"))
-        for signal in project.signals.values():
+        for signal in active_signals:
             if len(signal.destinations) == 1:
                 lines.append(
                     "net %-28s %-42s => %s"
