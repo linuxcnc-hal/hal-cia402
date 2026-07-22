@@ -481,6 +481,9 @@ class NoteItem(QtWidgets.QGraphicsRectItem):
         menu = QtWidgets.QMenu()
         edit_action = menu.addAction("Edit note…")
         delete_action = menu.addAction("Delete note")
+        lock_action = menu.addAction(
+            "Unlock note position" if self.note.locked else "Lock note position"
+        )
         selected = (
             menu.exec(event.screenPos())
             if hasattr(menu, "exec")
@@ -490,6 +493,14 @@ class NoteItem(QtWidgets.QGraphicsRectItem):
             self.editor.edit_note(self.note.note_id)
         elif selected == delete_action:
             self.editor.remove_note(self.note.note_id)
+        elif selected == lock_action:
+            self.note.locked = not self.note.locked
+            flags = self.flags()
+            if self.note.locked:
+                flags &= ~QtWidgets.QGraphicsItem.ItemIsMovable
+            else:
+                flags |= QtWidgets.QGraphicsItem.ItemIsMovable
+            self.setFlags(flags)
         event.accept()
 
 
