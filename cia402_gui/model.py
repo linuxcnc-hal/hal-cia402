@@ -491,6 +491,7 @@ class WiringProject:
                     "note_id": note.note_id,
                     "text": note.text,
                     "position": list(note.position),
+                    "locked": note.locked,
                 }
                 for note in self.notes.values()
             ],
@@ -545,6 +546,7 @@ class WiringProject:
                 note_id=str(raw_note["note_id"]),
                 text=str(raw_note.get("text", "")),
                 position=tuple(raw_note.get("position", (0.0, 0.0))),
+                locked=bool(raw_note.get("locked", False)),
             )
             project.notes[note.note_id] = note
         return project
