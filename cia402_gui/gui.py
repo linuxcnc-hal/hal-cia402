@@ -459,7 +459,7 @@ class NoteItem(QtWidgets.QGraphicsRectItem):
             QtWidgets.QGraphicsItem.ItemIsSelectable
             | QtWidgets.QGraphicsItem.ItemSendsGeometryChanges
         )
-        if not node.locked:
+        if not note.locked:
             flags |= QtWidgets.QGraphicsItem.ItemIsMovable
         self.setFlags(flags)
         self.setZValue(2)

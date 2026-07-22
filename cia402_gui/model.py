@@ -82,6 +82,7 @@ class Note:
     note_id: str
     text: str
     position: Tuple[float, float] = (0.0, 0.0)
+    locked: bool = False
 
 
 class WiringError(ValueError):
